@@ -1,0 +1,6 @@
+set(Python3_FOUND TRUE)
+set(Python3_Interpreter_FOUND TRUE)
+set(Python3_EXECUTABLE /home/codespace/.python/current/bin/python3)
+set(Python3_INCLUDE_DIRS "")
+set(Python3_LIBRARIES "")
+set(Python3_VERSION "3.12.1")

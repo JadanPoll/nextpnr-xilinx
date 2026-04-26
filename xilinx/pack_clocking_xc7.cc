@@ -80,7 +80,7 @@ void XC7Packer::pack_plls()
     for (auto &cell : ctx->cells) {
         CellInfo *ci = cell.second.get();
         // Preplace PLLs to make use of dedicated/short routing paths
-        if (ci->type.in(id_MMCM_MMCM_TOP, id_PLL_PLL_TOP))
+        if (ci->type.in(id_MMCM_MMCM_TOP, id_PLL_PLL_TOP, id_MMCME2_ADV_MMCME2_ADV, id_PLLE2_ADV_PLLE2_ADV))
             try_preplace(ci, id_CLKIN1);
         if (ci->type == id_MMCM_MMCM_TOP) {
             // Fixup parameters
