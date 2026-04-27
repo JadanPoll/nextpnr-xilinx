@@ -1197,6 +1197,8 @@ struct FasmBackend
                 pop(2);
             } else if (ci->type == id_PLLE2_ADV_PLLE2_ADV) {
                 write_pll(ci);
+            } else if (ci->type == id_MMCME2_ADV_MMCME2_ADV) {
+                write_mmcm(ci);
             }
             blank();
         }
@@ -1407,7 +1409,7 @@ struct FasmBackend
         // FIXME: variable duty cycle
         int high = 1, low = 1, phasemux = 0, delaytime = 0, frac = 0;
         bool no_count = false, edge = false;
-        double divide = float_or_default(ci, name + ((name == "CLKFBOUT") ? "_MULT" : "_DIVIDE"), 1);
+        double divide = (name == "CLKFBOUT") ? float_or_default(ci, name + "_MULT_F", float_or_default(ci, name + "_MULT", 1.0)) : float_or_default(ci, name + "_DIVIDE_F", float_or_default(ci, name + "_DIVIDE", 1.0));
         double phase = float_or_default(ci, name + "_PHASE", 1);
         if (divide <= 1) {
             no_count = true;
@@ -1503,6 +1505,41 @@ struct FasmBackend
         write_int_vector("LKTABLE[39:0]", lktable, 40);
         write_bit("LOCKREG3_RESERVED[0]");
         write_int_vector("TABLE[9:0]", table, 10);
+        pop(2);
+    }
+
+    void write_mmcm(CellInfo *ci)
+    {
+        push(get_tile_name(ci->bel.tile));
+        push("MMCME2_ADV");
+        write_bit("IN_USE");
+        write_bit("ZINV_PWRDWN", bool_or_default(ci->params, id_IS_PWRDWN_INVERTED, false));
+        write_bit("ZINV_RST", bool_or_default(ci->params, id_IS_RST_INVERTED, false));
+        write_bit("INV_CLKINSEL", bool_or_default(ci->params, id_IS_CLKINSEL_INVERTED, false));
+        write_bit("ZINV_PSEN", bool_or_default(ci->params, id_IS_PSEN_INVERTED, false));
+        write_bit("ZINV_PSINCDEC", bool_or_default(ci->params, id_IS_PSINCDEC_INVERTED, false));
+        write_pll_clkout("DIVCLK", ci);
+        write_pll_clkout("CLKFBOUT", ci);
+        write_pll_clkout("CLKOUT0", ci);
+        write_pll_clkout("CLKOUT1", ci);
+        write_pll_clkout("CLKOUT2", ci);
+        write_pll_clkout("CLKOUT3", ci);
+        write_pll_clkout("CLKOUT4", ci);
+        write_pll_clkout("CLKOUT5", ci);
+        write_pll_clkout("CLKOUT6", ci);
+        std::string comp = str_or_default(ci->params, id_COMPENSATION, "INTERNAL");
+        push("COMP");
+        if (comp == "INTERNAL") {
+            write_bit("Z_ZHOLD");
+        } else {
+            NPNR_ASSERT_FALSE("unsupported MMCM compensation type");
+        }
+        pop();
+        write_int_vector("FILTREG1_RESERVED[11:0]", 0x8, 12);
+        write_int_vector("LKTABLE[39:0]", 0xB5BE8FA401ULL, 40);
+        write_bit("LOCKREG3_RESERVED[0]");
+        write_int_vector("TABLE[9:0]", 0x3CC, 10);
+        write_bit("POWER_REG_POWER_REG_POWER_REG[8]");
         pop(2);
     }
 

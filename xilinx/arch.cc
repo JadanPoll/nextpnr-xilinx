@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <boost/algorithm/string.hpp>
+#include <boost/optional.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include <cmath>
 #include <cstring>

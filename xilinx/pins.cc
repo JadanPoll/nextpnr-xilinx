@@ -327,6 +327,9 @@ void get_invertible_pins(Context *ctx, dict<IdString, pool<IdString>> &invertibl
     invertible_pins[id_LDCE].insert(id_G);
     invertible_pins[id_LDPE].insert(id_G);
     // invertible_pins[id_LDPE].insert(id_PRE);
+    invertible_pins[id_MMCME2_ADV].insert(id_CLKFBIN);
+    invertible_pins[id_MMCME2_ADV].insert(id_CLKIN1);
+    invertible_pins[id_MMCME2_ADV].insert(id_CLKIN2);
     invertible_pins[id_MMCME2_ADV].insert(id_CLKINSEL);
     invertible_pins[id_MMCME2_ADV].insert(id_PSEN);
     invertible_pins[id_MMCME2_ADV].insert(id_PSINCDEC);
@@ -533,6 +536,24 @@ void get_tied_pins(Context *ctx, dict<IdString, dict<IdString, bool>> &tied_pins
     tied_pins[id_PLLE2_ADV][id_DWE] = false;
     tied_pins[id_PLLE2_ADV][id_PWRDWN] = false;
     tied_pins[id_PLLE2_ADV][id_RST] = false;
+
+    // MMCM xc7
+    tied_pins[id_MMCME2_ADV][id_CLKFBIN] = false;
+    tied_pins[id_MMCME2_ADV][id_CLKIN1] = false;
+    tied_pins[id_MMCME2_ADV][id_CLKIN2] = false;
+    tied_pins[id_MMCME2_ADV][id_CLKINSEL] = true;
+    for (int i = 0; i < 7; i++)
+        tied_pins[id_MMCME2_ADV][ctx->id("DADDR[" + std::to_string(i) + "]")] = false;
+    tied_pins[id_MMCME2_ADV][id_DCLK] = false;
+    tied_pins[id_MMCME2_ADV][id_DEN] = false;
+    for (int i = 0; i < 16; i++)
+        tied_pins[id_MMCME2_ADV][ctx->id("DI[" + std::to_string(i) + "]")] = false;
+    tied_pins[id_MMCME2_ADV][id_DWE] = false;
+    tied_pins[id_MMCME2_ADV][id_PSCLK] = false;
+    tied_pins[id_MMCME2_ADV][id_PSEN] = false;
+    tied_pins[id_MMCME2_ADV][id_PSINCDEC] = false;
+    tied_pins[id_MMCME2_ADV][id_PWRDWN] = false;
+    tied_pins[id_MMCME2_ADV][id_RST] = false;
 
     // Misc clock buffers
     tied_pins[id_BUFGCE_DIV][id_CE] = true;
