@@ -1445,6 +1445,10 @@ struct FasmBackend
                 write_bit(name + "_CLKOUT2_FRAC_EN[0]", edge);
                 write_int_vector(name + "_CLKOUT2_FRAC[2:0]", frac, 3);
             }
+        } else if (name != "DIVCLK") {
+            write_int_vector(name + "_CLKOUT1_HIGH_TIME[5:0]", 1, 6);
+            write_int_vector(name + "_CLKOUT1_LOW_TIME[5:0]", 1, 6);
+            write_bit(name + "_CLKOUT2_NO_COUNT[0]", true);
         }
     }
 
@@ -1465,6 +1469,7 @@ struct FasmBackend
         write_pll_clkout("CLKOUT3", ci);
         write_pll_clkout("CLKOUT4", ci);
         write_pll_clkout("CLKOUT5", ci);
+        write_pll_clkout("CLKOUT6", ci);
 
         std::string comp = str_or_default(ci->params, id_COMPENSATION, "INTERNAL");
         push("COMPENSATION");
@@ -1476,11 +1481,28 @@ struct FasmBackend
         }
         pop();
 
-        // FIXME: should these be calculated somehow?
+        // Compute VCO frequency
+        double mult_f = float_or_default(ci, "CLKFBOUT_MULT_F", float_or_default(ci, "CLKFBOUT_MULT", 8));
+        double period = float_or_default(ci, "CLKIN1_PERIOD", 10.0);
+        int divclk = int_or_default(ci->params, id_DIVCLK_DIVIDE, 1);
+        double vco = mult_f * 1000.0 / (period * divclk);
+
+        uint64_t lktable;
+        uint32_t table;
+        if (vco < 675) {
+            lktable = 0x8C7E8FA401ULL; table = 0x3AC;
+        } else if (vco < 900) {
+            lktable = 0xB5BE8FA401ULL; table = 0x3CC;
+        } else if (vco < 1100) {
+            lktable = 0xE73E8FA401ULL; table = 0x3D4;
+        } else {
+            lktable = 0xFFF39FA401ULL; table = 0x344;
+        }
+
         write_int_vector("FILTREG1_RESERVED[11:0]", 0x8, 12);
-        write_int_vector("LKTABLE[39:0]", 0xB5BE8FA401ULL, 40);
+        write_int_vector("LKTABLE[39:0]", lktable, 40);
         write_bit("LOCKREG3_RESERVED[0]");
-        write_int_vector("TABLE[9:0]", 0x3B4, 10);
+        write_int_vector("TABLE[9:0]", table, 10);
         pop(2);
     }
 
