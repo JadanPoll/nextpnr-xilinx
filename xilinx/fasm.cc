@@ -296,6 +296,11 @@ struct FasmBackend
                 // CLK_PERF pips bound by routeClock but absent from prjxray spartan7 DB
                 return;
             }
+            // Nathan: CLK_FREQ_BB*_NS pips absent from prjxray spartan7 DB for both
+            // CMT_TOP_R_LOWER_B (MMCM) and CMT_TOP_R_UPPER_T (PLL).
+            if (boost::starts_with(tile_name, "CMT_TOP_R") && boost::contains(dst_name, "CLK_FREQ_BB")) {
+                return;
+            }
             if (boost::starts_with(tile_name, "HCLK_CMT") && boost::contains(dst_name, "PHSR_PERFCLK")) {
                 // PHSR_PERFCLK pips bound by routeClock but absent from prjxray spartan7 DB
                 return;
@@ -1477,15 +1482,6 @@ struct FasmBackend
         write_bit("ZINV_PWRDWN", bool_or_default(ci->params, id_IS_PWRDWN_INVERTED, false));
         write_bit("ZINV_RST", bool_or_default(ci->params, id_IS_RST_INVERTED, false));
         write_bit("INV_CLKINSEL", bool_or_default(ci->params, id_IS_CLKINSEL_INVERTED, false));
-        // Nathan: ZINV_PSEN/ZINV_PSINCDEC always 1 for MMCME2_ADV — no IS_PSEN/PSINCDEC_INVERTED
-        // param exists for this primitive (only MMCME4_ADV has it). Verified against
-        // segbits_cmt_top_r_lower_b.db: MMCME2_ADV.ZINV_PSEN 28_110, ZINV_PSINCDEC 29_110
-        write_bit("ZINV_PSEN");
-        write_bit("ZINV_PSINCDEC");
-        // Nathan: POWER_REG[8] is a reserved power register bit always set by Vivado for MMCME2_ADV.
-        // Only bit [8] of the 16-bit POWER_REG field is set in all observed configurations.
-        // Verified against segbits_cmt_top_r_lower_b.db: MMCME2_ADV.POWER_REG_POWER_REG_POWER_REG[8] 29_699
-        write_bit("POWER_REG_POWER_REG_POWER_REG[8]");
         write_pll_clkout("DIVCLK", ci);
         write_pll_clkout("CLKFBOUT", ci);
         write_pll_clkout("CLKOUT0", ci);
@@ -1537,6 +1533,14 @@ struct FasmBackend
         write_bit("ZINV_PWRDWN", bool_or_default(ci->params, id_IS_PWRDWN_INVERTED, false));
         write_bit("ZINV_RST", bool_or_default(ci->params, id_IS_RST_INVERTED, false));
         write_bit("INV_CLKINSEL", bool_or_default(ci->params, id_IS_CLKINSEL_INVERTED, false));
+        // Nathan: ZINV_PSEN/ZINV_PSINCDEC always 1 for MMCME2_ADV — no IS_PSEN/PSINCDEC_INVERTED
+        // param exists for this primitive (only MMCME4_ADV has it). Verified against
+        // segbits_cmt_top_r_lower_b.db: MMCME2_ADV.ZINV_PSEN 28_110, ZINV_PSINCDEC 29_110
+        write_bit("ZINV_PSEN");
+        write_bit("ZINV_PSINCDEC");
+        // Nathan: POWER_REG[8] reserved power register bit always set by Vivado for MMCME2_ADV.
+        // Verified: segbits_cmt_top_r_lower_b.db MMCME2_ADV.POWER_REG_POWER_REG_POWER_REG[8] 29_699
+        write_bit("POWER_REG_POWER_REG_POWER_REG[8]");
         write_pll_clkout("DIVCLK", ci, true);
         write_pll_clkout("CLKFBOUT", ci, true);
         write_pll_clkout("CLKOUT0", ci, true);
