@@ -313,11 +313,28 @@ void get_invertible_pins(Context *ctx, dict<IdString, pool<IdString>> &invertibl
     invertible_pins[id_IDDR_2CLK].insert(id_C);
     // invertible_pins[id_IDDR_2CLK].insert(id_D);
     invertible_pins[id_IDELAYE2].insert(id_C);
-    invertible_pins[id_IDELAYE2].insert(id_IDATAIN);
+    // Nathan: invertible_pins[id_IDELAYE2].insert(id_IDATAIN);
+
+    // Nathan: IDATAIN (IDELAYE2): same problem. The chipdb has no routing arc from
+    // PSEUDO_VCC to IDELAY/IDATAIN, so tying it low triggers the invertible_pins
+    // optimization and then a router abort. IDATAIN must always be driven by a
+    // real INBUF — pack_iologic() enforces this with an explicit log_error() check.
+    // Having it here in invertible_pins is therefore both wrong and redundant
+
     invertible_pins[id_ODELAYE2].insert(id_C);
     invertible_pins[id_ODELAYE2].insert(id_ODATAIN);
     invertible_pins[id_ISERDESE2].insert(id_CLKB);
-    invertible_pins[id_ISERDESE2].insert(id_CLKDIVP);
+    
+    
+    //Nathan: invertible_pins[id_ISERDESE2].insert(id_CLKDIVP);
+    // Nathan: CLKDIVP (ISERDESE2): no IS_CLKDIVP_INVERTED parameter exists in hardware;
+    // the inversion is structural only (MEMORY_DDR3 mode). More critically, the
+    // chipdb has no routing arc from PSEUDO_VCC to ILOGIC/CLKDIVPINV_OUT, so the
+    // invertible_pins optimization (GND->VCC+inversion) causes a router abort on
+    // any design that ties CLKDIVP low. Leave absent so pack_constants() never
+    // touches it.
+
+
     invertible_pins[id_ISERDESE2].insert(id_CLKDIV);
     invertible_pins[id_ISERDESE2].insert(id_CLK);
     // invertible_pins[id_ISERDESE2].insert(id_D);
@@ -496,6 +513,14 @@ void get_tied_pins(Context *ctx, dict<IdString, dict<IdString, bool>> &tied_pins
     tied_pins[id_IDELAYE2][id_LDPIPEEN] = false;
     tied_pins[id_IDELAYE2][id_CINVCTRL] = false;
 
+    // Nathan:ISERDESE2: pins below are configuration-dependent and must never be
+    // auto-tied by pack_constants(). SHIFTIN1/2 are only valid in SLAVE
+    // cascade. DDLY is only valid when IOBDELAY=IFD (must be driven by
+    // IDELAYE2 DATAOUT). CLKDIVP is only valid in MEMORY_DDR3 mode and
+    // has no constant routing arc in the chipdb.
+    // Leaving these absent from tied_pins ensures pack_constants() never
+    // assigns PSEUDO_GND/PSEUDO_VCC to them.
+    
     // IO primitives
     tied_pins[id_IOBUFDSE3][id_DCITERMDISABLE] = false;
     tied_pins[id_IOBUFDSE3][ctx->id("OSC_EN[0]")] = false;

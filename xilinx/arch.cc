@@ -398,6 +398,14 @@ void Arch::setup_pip_blacklist()
                     blacklist_pips[td.type].insert(j);
                 if (dest_name.find("MMCM_CLK_FREQ_BB") != std::string::npos)
                     blacklist_pips[td.type].insert(j);
+
+                // Nathan added:
+                // CLK_PERF{0..3} pips exist in the chipdb but are absent from the
+                // prjxray spartan7 segbits/ppips databases. fasm2frames crashes with
+                // FasmLookupError if these are emitted. The correct documented pip for
+                // MMCM clock output distribution is CLK_MMCM{0..13} (ppips, always).
+                if (dest_name.find("CLK_PERF") != std::string::npos)
+                    blacklist_pips[td.type].insert(j);
             }
         }
     }
