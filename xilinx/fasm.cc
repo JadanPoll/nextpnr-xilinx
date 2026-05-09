@@ -1516,7 +1516,7 @@ struct FasmBackend
         } else if (vco < 1400) {
             lktable = 0xFFF39FA401ULL; table = 0x3F4;  // 1200MHz
         } else {
-            lktable = 0xFFF39FA401ULL; table = 0x3D4;  // 1600MHz
+            lktable = 0xFFE71FA401ULL; table = 0x3D4;  // 1600MHz
         }
         write_int_vector("FILTREG1_RESERVED[11:0]", 0x8, 12);
         write_int_vector("LKTABLE[39:0]", lktable, 40);
