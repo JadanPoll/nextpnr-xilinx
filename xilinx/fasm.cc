@@ -317,6 +317,7 @@ struct FasmBackend
                 // PHSR_PERFCLK pips bound by routeClock but absent from prjxray spartan7 DB
                 return;
             }
+
             std::string orig_dst_name = dst_name;
             if (boost::starts_with(tile_name, "RIOI3_SING") || boost::starts_with(tile_name, "LIOI3_SING") ||
                 boost::starts_with(tile_name, "RIOI_SING")) {
@@ -1123,6 +1124,15 @@ struct FasmBackend
 
             std::string iobdelay = str_or_default(ci->params, id_IOBDELAY, "NONE");
             write_bit("IFFDELMUXE3.P0", (iobdelay == "IFD"));
+            // Nathan: IDELMUXE3 mux: P1=direct path, P0=IDELAY path.
+            // Mirrors ILOGICE3_IFF logic exactly: check if D port is driven by IDELAYE2.
+            // DB: LIOI3.ILOGIC_Y0.IDELMUXE3.P1 !29_101 (inverted bit)
+            {
+                NetInfo *d_net = ci->getPort(id_D);
+                bool d_from_idelay = (d_net != nullptr && d_net->driver.cell != nullptr &&
+                    boost::contains(d_net->driver.cell->type.str(ctx), "IDELAYE2"));
+                write_bit("IDELMUXE3.P1", !d_from_idelay);
+            }
             write_bit("ZINV_D", !bool_or_default(ci->params, id_IS_D_INVERTED, false) && (iobdelay != "IFD"));
 
             push("ISERDES");
