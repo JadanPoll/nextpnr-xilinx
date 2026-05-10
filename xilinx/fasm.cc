@@ -1053,8 +1053,11 @@ struct FasmBackend
             write_bit("ODDR_TDDR.IN_USE");
             write_bit("OQUSED", ci->getPort(id_OQ) != nullptr);
             write_bit("ZINV_CLK", !bool_or_default(ci->params, id_IS_CLK_INVERTED, false));
+            // Nathan: ZINV_T1 is written via PIP_SITE_INTERNAL in write_pip when T1->T1INV_OUT
+            // pip is bound. Removed "|| t == T1" special case — Vivado does not set ZINV_T1
+            // when T1 is tied to GND. Verified against fuzzer: ZINV_T1 in extra for all 6 OSERDESE2 cases.
             for (std::string t : {"T1", "T2", "T3", "T4"})
-                write_bit("ZINV_" + t, (ci->getPort(ctx->id(t)) != nullptr || t == "T1") &&
+                write_bit("ZINV_" + t, ci->getPort(ctx->id(t)) != nullptr &&
                                                !bool_or_default(ci->params, ctx->id("IS_" + t + "_INVERTED"), false));
             for (std::string d : {"D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"})
                 write_bit("IS_" + d + "_INVERTED",
@@ -1510,7 +1513,7 @@ struct FasmBackend
         uint64_t lktable;
         uint32_t table;
         if (vco < 900) {
-            lktable = 0xB5BE8FA401ULL; table = 0x3CC;  // 800MHz
+            lktable = 0xB5BE8FA401ULL; table = 0x3B4;  // 800MHz
         } else if (vco < 1100) {
             lktable = 0xE73E8FA401ULL; table = 0x3DC;  // 1000MHz
         } else if (vco < 1400) {
