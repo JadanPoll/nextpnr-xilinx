@@ -1257,6 +1257,38 @@ struct FasmBackend
                         hclk_by_row[tile / ctx->chip_info->width].insert(s.substr(s.find("BUFHCLK")));
                     }
                 }
+                // Nathan: emit MUX_CLK_0 mux selection for MMCM/PLL clock output distribution.
+                // nextpnr does not bind the HCLK_CMT_MUX_CLK pip, so we detect MMCM/PLL cells
+                // by tile name Y coordinate offset. Verified exhaustively against xc7s50 tilegrid:
+                //   HCLK_CMT name-Y = MMCM LOWER_B name-Y + 17  (all 5 LOWER_B tiles confirmed)
+                //   HCLK_CMT name-Y = PLL  UPPER_T name-Y - 18  (all 5 UPPER_T tiles confirmed)
+                // Both L and R side variants confirmed. DB entries verified:
+                //   HCLK_CMT.HCLK_CMT_MUX_CLK_0.HCLK_CMT_MUX_CLK_MMCM0 27_149 27_154
+                //   HCLK_CMT.HCLK_CMT_MUX_CLK_0.HCLK_CMT_MUX_CLK_PLL0  26_149 27_155
+                {
+                    int hclk_x = -1, hclk_y = -1;
+                    bool parsed = (sscanf(name.c_str(), "HCLK_CMT_X%dY%d", &hclk_x, &hclk_y) == 2 ||
+                                   sscanf(name.c_str(), "HCLK_CMT_L_X%dY%d", &hclk_x, &hclk_y) == 2);
+                    if (parsed) {
+                        for (auto &cell2 : ctx->cells) {
+                            CellInfo *ci2 = cell2.second.get();
+                            if (ci2->bel == BelId()) continue;
+                            std::string cmt_tile = get_tile_name(ci2->bel.tile);
+                            int cmt_x = -1, cmt_y = -1;
+                            if (ci2->type == id_MMCME2_ADV_MMCME2_ADV) {
+                                if ((sscanf(cmt_tile.c_str(), "CMT_TOP_R_LOWER_B_X%dY%d", &cmt_x, &cmt_y) == 2 ||
+                                     sscanf(cmt_tile.c_str(), "CMT_TOP_L_LOWER_B_X%dY%d", &cmt_x, &cmt_y) == 2) &&
+                                    cmt_x == hclk_x && hclk_y == cmt_y + 17)
+                                    write_bit("HCLK_CMT_MUX_CLK_0.HCLK_CMT_MUX_CLK_MMCM0");
+                            } else if (ci2->type == id_PLLE2_ADV_PLLE2_ADV) {
+                                if ((sscanf(cmt_tile.c_str(), "CMT_TOP_R_UPPER_T_X%dY%d", &cmt_x, &cmt_y) == 2 ||
+                                     sscanf(cmt_tile.c_str(), "CMT_TOP_L_UPPER_T_X%dY%d", &cmt_x, &cmt_y) == 2) &&
+                                    cmt_x == hclk_x && hclk_y == cmt_y - 18)
+                                    write_bit("HCLK_CMT_MUX_CLK_0.HCLK_CMT_MUX_CLK_PLL0");
+                            }
+                        }
+                    }
+                }
             }
             pop();
             blank();
