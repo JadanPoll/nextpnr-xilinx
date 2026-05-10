@@ -972,6 +972,7 @@ struct FasmBackend
 
     void write_iol_config(CellInfo *ci)
     {
+        
         std::string tile = get_tile_name(ci->bel.tile);
         push(tile);
         bool is_sing = boost::contains(tile, "_SING_");
@@ -979,7 +980,19 @@ struct FasmBackend
 
         std::string site = ctx->getBelSite(ci->bel);
         std::string sitetype = site.substr(0, site.find('_'));
+
+
+        // Nathan: IMPORTANT VERY CAUTIOUS FIX CAUSE THIS NEEDS TO BE THE MATCH. MIGHT REVERT
+        // Nathan: prjxray DB uses ILOGIC/OLOGIC not ILOGICE3/OLOGICE3
+        if (sitetype == "ILOGICE3") sitetype = "ILOGIC";
+        else if (sitetype == "OLOGICE3") sitetype = "OLOGIC";
+        ////////////////////////////////////
+
+
         Loc siteloc = ctx->getSiteLocInTile(ci->bel);
+
+
+
         push(sitetype + "_Y" + std::to_string(is_sing ? (is_top_sing ? 1 : 0) : (1 - siteloc.y)));
 
         if (ci->type == id_ILOGICE3_IFF) {
@@ -1107,7 +1120,12 @@ struct FasmBackend
             write_bit("TSRTYPE.SYNC");
             pop();
         } else if (ci->type == id_ISERDESE2_ISERDESE2) {
+            
+
+
             std::string data_rate = str_or_default(ci->params, id_DATA_RATE);
+            
+            
             write_bit("IDDR_OR_ISERDES.IN_USE");
             if (data_rate == "DDR")
                 write_bit("IDDR.IN_USE");
