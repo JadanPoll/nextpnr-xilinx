@@ -240,17 +240,29 @@ struct FasmBackend
         // site internal pips here.
         if (pd.flags == PIP_SITE_INTERNAL) {
             if (src.str(ctx) == "T1" && dst.str(ctx) == "T1INV_OUT") {
-                auto srcwire_uphill_iter = ctx->getPipsUphill(ctx->getPipSrcWire(pip));
-                auto uphill = srcwire_uphill_iter.begin();
-                if (uphill != srcwire_uphill_iter.end()) {
-                    // source wire should be like: LIOI3_X0Y73/IOI_OLOGIC1_T1
-                    auto loc = ctx->getWireName(ctx->getPipSrcWire(*uphill)).str(ctx);
-                    boost::replace_all(loc, "/", ".");
-                    boost::erase_all(loc, "_T1");
-                    boost::replace_all(loc, "IOI_OLOGIC", "OLOGIC_Y");
-                    // the replacements transformed it into : LIOI3_X0Y73.OLOGIC_Y1
-                    if (debug_this) std::cerr << "writing bit " << loc << "." << "ZINV_T1" << std::endl;
-                    out << loc << "." << "ZINV_T1" << std::endl;
+                // Nathan: only emit ZINV_T1 when T1 is driven by a real signal, not GND.
+                // Vivado does not set ZINV_T1 when T1=GND (e.g. DATA_RATE_TQ=BUF, TRISTATE_WIDTH=1).
+                // $PACKER_GND_NET confirmed as GND net name in pack.cc/pack_carry_xc7.cc.
+                // Verified: ZINV_T1 in extra for all 6 OSERDESE2 fuzzer cases with T1=GND.
+                auto src_wire = ctx->getPipSrcWire(pip);
+                auto *src_net = ctx->getBoundWireNet(src_wire);
+                // Nathan: T1=GND in HDL becomes $PACKER_VCC_NET after synthesis (inversion absorbed).
+                // Vivado does not set ZINV_T1 when T1 is tied to a constant.
+                // Verified: T1 wire carries $PACKER_VCC_NET when T1=1'b0 in HDL.
+                bool is_const = (src_net != nullptr && 
+                    (src_net->name == ctx->id("$PACKER_GND_NET") || 
+                     src_net->name == ctx->id("$PACKER_VCC_NET")));
+                if (!is_const) {
+                    auto srcwire_uphill_iter = ctx->getPipsUphill(src_wire);
+                    auto uphill = srcwire_uphill_iter.begin();
+                    if (uphill != srcwire_uphill_iter.end()) {
+                        auto loc = ctx->getWireName(ctx->getPipSrcWire(*uphill)).str(ctx);
+                        boost::replace_all(loc, "/", ".");
+                        boost::erase_all(loc, "_T1");
+                        boost::replace_all(loc, "IOI_OLOGIC", "OLOGIC_Y");
+                        if (debug_this) std::cerr << "writing bit " << loc << "." << "ZINV_T1" << std::endl;
+                        out << loc << "." << "ZINV_T1" << std::endl;
+                    }
                 }
             }
             return;
