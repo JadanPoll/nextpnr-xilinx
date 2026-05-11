@@ -961,8 +961,17 @@ struct FasmBackend
         else
             inv = ctx->getBelByNameStr(site + "/IOB33S/O_ININV");
 
-        if (inv != BelId() && ctx->getBoundBelCell(inv) != nullptr)
-            write_bit("OUT_DIFF");
+
+        // Nathan: OUT_DIFF set for DIFF_* iostandards on xc7 HR (e.g. DIFF_SSTL135).
+        // Not set for LVDS_25/TMDS_33 (only_diff). Confirmed from Vivado ground truth.
+        // For IOB18 HP banks, still use O_ININV cell check.
+        if (is_riob18) {
+            if (inv != BelId() && ctx->getBoundBelCell(inv) != nullptr)
+                write_bit("OUT_DIFF");
+        } else {
+            if (is_output && is_diff && has_diff_prefix && yLoc == 0)
+                write_bit("OUT_DIFF");
+        }
 
         if (is_stepdown && !is_sing)
             write_bit("IOB_Y" + std::to_string(ioLoc.y) + ".LVCMOS12_LVCMOS15_LVCMOS18_SSTL135_SSTL15.STEPDOWN");

@@ -164,16 +164,33 @@ void XC7Packer::decompose_iob(CellInfo *xil_iob, bool is_hr, const std::string &
         CellInfo *inbuf = insert_diffibuf(int_name(xil_iob->name, "IBUF", is_se_iobuf), ibuf_type,
                                           {pad_p_net, pad_n_net}, top_out);
         if (is_riob18) {
-            inbuf->attrs[id_BEL] = site_p + "/IOB18M/INBUF_DCIEN";
-            inbuf->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB18M");
+            inbuf->attrs[id_BEL] = site_p + "/IOB18/INBUF_DCIEN";
+            inbuf->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB18");
         } else {
-            inbuf->attrs[id_BEL] = site_p + "/IOB33M/INBUF_EN";
-            inbuf->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB33M");
+            inbuf->attrs[id_BEL] = site_p + "/IOB33/INBUF_EN";
+            inbuf->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB33");
         }
 
         if (is_diff_iobuf)
             subcells.push_back(inbuf);
     }
+
+
+    // Nathan: xc7 HR IOB33 differential output fix.
+    // O_ININV does not exist as a wire or pip in LIOB33 tile DB (confirmed via
+    // prjxray-db/spartan7/tile_type_LIOB33.json: zero O_ININV wires or pips).
+    // Attempting to route through O_ININV causes: "Failed to route arc... O_ININV_OUT
+    // to OUSED_OUT" — confirmed from nextpnr error on OBUFDS sanity test.
+    //
+    // xc7 HR differential output works via hardware pip DIFFO_OUT0->DIFFO_IN1
+    // (confirmed in tile DB: 'LIOB33.IOB_DIFFO_OUT0->IOB_DIFFO_IN1' pip exists).
+    // The OUT_DIFF config bit in fasm.cc enables this pip for DIFF_* iostandards.
+    // For LVDS_25/TMDS_33, the differential drive is handled by the LVDS_25.OUT
+    // config bit on the master side — no OUT_DIFF or inv needed.
+    //
+    // IOB18 HP banks (is_riob18) DO support O_ININV routing — left unchanged.
+    // Only xc7 HR IOB33 banks are affected by this fix.
+
 
     if (is_diff_obuf || is_diff_out_iobuf || is_diff_iobuf) {
         // FIXME: true diff outputs
@@ -185,60 +202,51 @@ void XC7Packer::decompose_iob(CellInfo *xil_iob, bool is_hr, const std::string &
         std::string site_n = pad_site(pad_n_net);
         std::string tile_p = get_tilename_by_sitename(ctx, site_p);
         bool is_riob18 = boost::starts_with(tile_p, "RIOB18_");
-
         xil_iob->disconnectPort((is_diff_iobuf || is_diff_out_iobuf) ? id_IO : id_O);
         xil_iob->disconnectPort((is_diff_iobuf || is_diff_out_iobuf) ? id_IOB : id_OB);
-
-        NetInfo *inv_i = create_internal_net(xil_iob->name, is_diff_obuf ? "I_B" : "OBUFTDS$subnet$I_B");
-        CellInfo *inv = insert_outinv(int_name(xil_iob->name, is_diff_obuf ? "INV" : "OBUFTDS$subcell$INV"),
-                                      xil_iob->getPort(id_I), inv_i);
-        if (is_riob18) {
-            inv->attrs[id_BEL] = site_n + "/IOB18S/O_ININV";
-            inv->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB18S");
-        } else {
-            inv->attrs[id_BEL] = site_n + "/IOB33S/O_ININV";
-            inv->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB33S");
-        }
-
         bool has_dci = xil_iob->type.in(id_IOBUFDS_DCIEN, id_IOBUFDSE3);
-
         CellInfo *obuf_p = insert_obuf(int_name(xil_iob->name, is_diff_obuf ? "P" : "OBUFTDS$subcell$P"),
                                        (is_diff_iobuf || is_diff_out_iobuf || (xil_iob->type == id_OBUFTDS))
                                                ? (has_dci ? id_OBUFT_DCIEN : id_OBUFT)
                                                : id_OBUF,
                                        xil_iob->getPort(id_I), pad_p_net, xil_iob->getPort(id_T));
-
         if (is_riob18) {
-            obuf_p->attrs[id_BEL] = site_p + "/IOB18M/OUTBUF_DCIEN";
-            obuf_p->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB18M");
+            obuf_p->attrs[id_BEL] = site_p + "/IOB18/OUTBUF_DCIEN";
+            obuf_p->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB18");
         } else {
-            obuf_p->attrs[id_BEL] = site_p + "/IOB33M/OUTBUF";
-            obuf_p->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB33M");
+            obuf_p->attrs[id_BEL] = site_p + "/IOB33/OUTBUF";
+            obuf_p->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB33");
         }
         subcells.push_back(obuf_p);
         obuf_p->connectPort(id_DCITERMDISABLE, xil_iob->getPort(id_DCITERMDISABLE));
-
-        CellInfo *obuf_n = insert_obuf(int_name(xil_iob->name, is_diff_obuf ? "N" : "OBUFTDS$subcell$N"),
-                                       (is_diff_iobuf || is_diff_out_iobuf || (xil_iob->type == id_OBUFTDS))
-                                               ? (has_dci ? id_OBUFT_DCIEN : id_OBUFT)
-                                               : id_OBUF,
-                                       inv_i, pad_n_net, xil_iob->getPort(id_T));
-
         if (is_riob18) {
-            obuf_n->attrs[id_BEL] = site_n + "/IOB18S/OUTBUF_DCIEN";
+            // Nathan: IOB18 HP banks use explicit inverter + slave outbuf.
+            // O_ININV is routable on HP banks.
+            NetInfo *inv_i = create_internal_net(xil_iob->name, is_diff_obuf ? "I_B" : "OBUFTDS$subnet$I_B");
+            CellInfo *inv = insert_outinv(int_name(xil_iob->name, is_diff_obuf ? "INV" : "OBUFTDS$subcell$INV"),
+                                          xil_iob->getPort(id_I), inv_i);
+            inv->attrs[id_BEL] = site_n + "/IOB18S/O_ININV";
+            inv->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB18S");
+            CellInfo *obuf_n = insert_obuf(int_name(xil_iob->name, is_diff_obuf ? "N" : "OBUFTDS$subcell$N"),
+                                           (is_diff_iobuf || is_diff_out_iobuf || (xil_iob->type == id_OBUFTDS))
+                                                   ? (has_dci ? id_OBUFT_DCIEN : id_OBUFT)
+                                                   : id_OBUF,
+                                           inv_i, pad_n_net, xil_iob->getPort(id_T));
+            obuf_n->attrs[id_BEL] = site_n + "/IOB18/OUTBUF_DCIEN";
             obuf_n->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB18S");
-        } else {
-            obuf_n->attrs[id_BEL] = site_n + "/IOB33S/OUTBUF";
-            obuf_n->attrs[id_X_IOB_SITE_TYPE] = std::string("IOB33S");
+            obuf_n->connectPort(id_DCITERMDISABLE, xil_iob->getPort(id_DCITERMDISABLE));
+            subcells.push_back(inv);
+            subcells.push_back(obuf_n);
         }
-        obuf_n->connectPort(id_DCITERMDISABLE, xil_iob->getPort(id_DCITERMDISABLE));
-
+        // Nathan: xc7 HR IOB33 — no inv or obuf_n needed.
+        // N-side driven by hardware pip DIFFO_OUT0->DIFFO_IN1 (confirmed in prjxray DB).
+        // OUT_DIFF config bit (fasm.cc) enables this pip for DIFF_* iostandards.
+        // O_ININV has no wires/pips in LIOB33 tile — confirmed not routable.
         xil_iob->disconnectPort(id_DCITERMDISABLE);
-
-        subcells.push_back(inv);
         subcells.push_back(obuf_p);
-        subcells.push_back(obuf_n);
     }
+
+
 
     if (!subcells.empty()) {
         for (auto sc : subcells) {
@@ -733,23 +741,55 @@ void XC7Packer::pack_iologic()
             xform_cell(oddr_rules, ci);
 
             ci->attrs[id_BEL] = ol_site + (is_tristate ? "/TFF" : "/OUTFF");
-        } else if (ci->type == id_OSERDESE2) {
-            NetInfo *q = ci->getPort(id_OQ);
-            NetInfo *ofb = ci->getPort(id_OFB);
-            bool q_disconnected = q == nullptr || q->users.empty();
-            bool ofb_disconnected = ofb == nullptr || ofb->users.empty();
-            if (q_disconnected && ofb_disconnected) {
-                log_error("%s '%s' has disconnected OQ/OFB output ports\n", ci->type.c_str(ctx), ctx->nameOf(ci));
+        }
+        
+        else if (ci->type == id_OSERDESE2) {
+            bool is_slave = str_or_default(ci->params, id_SERDES_MODE, "MASTER") == "SLAVE";
+            if (is_slave) {
+                // Nathan: SLAVE OSERDESE2 cascade placement.
+                // Vivado ground truth: SLAVE=OLOGIC_X0Y87, MASTER=OLOGIC_X0Y88, same tile.
+                // Slave OQ is unconnected — Vivado accepts this for cascade.
+                // Find MASTER via SHIFTOUT1 net (ctx->id used — not in constids.inc).
+                // SLAVE site = MASTER site with Y decremented by 1.
+                NetInfo *shiftout = ci->getPort(ctx->id("SHIFTOUT1"));
+                if (shiftout == nullptr || shiftout->users.empty())
+                    log_error("OSERDESE2 SLAVE '%s' has disconnected SHIFTOUT1\n", ctx->nameOf(ci));
+                CellInfo *master = nullptr;
+                for (auto &usr : shiftout->users)
+                    if (usr.cell != ci) { master = usr.cell; break; }
+                if (master == nullptr)
+                    log_error("OSERDESE2 SLAVE '%s' cannot find MASTER\n", ctx->nameOf(ci));
+                NetInfo *master_oq = master->getPort(id_OQ);
+                if (master_oq == nullptr || master_oq->users.empty())
+                    log_error("OSERDESE2 MASTER for SLAVE '%s' has disconnected OQ\n", ctx->nameOf(ci));
+                CellInfo *ob = find_p_outbuf(master_oq);
+                if (ob == nullptr)
+                    log_error("OSERDESE2 MASTER for SLAVE '%s' has illegal OQ fanout\n", ctx->nameOf(ci));
+                std::string master_site = get_ologic_site(ob->attrs.at(id_BEL).as_string());
+                size_t y_pos = master_site.rfind('Y');
+                std::string slave_site = master_site.substr(0, y_pos + 1) +
+                                         std::to_string(std::stoi(master_site.substr(y_pos + 1)) - 1);
+                ci->attrs[id_BEL] = slave_site + "/OSERDESE2";
+            } else {
+                NetInfo *q = ci->getPort(id_OQ);
+                NetInfo *ofb = ci->getPort(id_OFB);
+                bool q_disconnected = q == nullptr || q->users.empty();
+                bool ofb_disconnected = ofb == nullptr || ofb->users.empty();
+                if (q_disconnected && ofb_disconnected)
+                    log_error("%s '%s' has disconnected OQ/OFB output ports\n", ci->type.c_str(ctx), ctx->nameOf(ci));
+                BelId io_bel;
+                CellInfo *ob = !q_disconnected ? find_p_outbuf(q) : find_p_outbuf(ofb);
+                if (ob != nullptr)
+                    io_bel = ctx->getBelByNameStr(ob->attrs.at(id_BEL).as_string());
+                else
+                    log_error("%s '%s' has illegal fanout on OQ or OFB output\n", ci->type.c_str(ctx), ctx->nameOf(ci));
+                std::string ol_site = get_ologic_site(ctx->getBelName(io_bel).str(ctx));
+                ci->attrs[id_BEL] = ol_site + "/OSERDESE2";
             }
-            BelId io_bel;
-            CellInfo *ob = !q_disconnected ? find_p_outbuf(q) : find_p_outbuf(ofb);
-            if (ob != nullptr)
-                io_bel = ctx->getBelByNameStr(ob->attrs.at(id_BEL).as_string());
-            else
-                log_error("%s '%s' has illegal fanout on OQ or OFB output\n", ci->type.c_str(ctx), ctx->nameOf(ci));
-            std::string ol_site = get_ologic_site(ctx->getBelName(io_bel).str(ctx));
-            ci->attrs[id_BEL] = ol_site + "/OSERDESE2";
-        } else if (ci->type == id_IDDR) {
+        }
+        
+        
+        else if (ci->type == id_IDDR) {
             fold_inverter(ci, "C");
 
             BelId io_bel;
