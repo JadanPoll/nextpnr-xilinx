@@ -846,7 +846,13 @@ struct Arch : BaseArch<ArchRanges>
         if (type != id_RAMBFIFO18E2_RAMBFIFO18E2 && type != id_RAMBFIFO36E2_RAMBFIFO36E2 &&
             type != id_RAMB18E2_RAMB18E2 && type != id_FIFO18E2_FIFO18E2 && type != id_RAMB36E2_RAMB36E2 &&
             type != id_FIFO36E2_FIFO36E2 && type != id_RAMBFIFO36E1_RAMBFIFO36E1 && type != id_RAMB36E1_RAMB36E1 &&
-            type != id_RAMB18E1_RAMB18E1)
+            type != id_RAMB18E1_RAMB18E1 &&
+        
+            // Nathan: Added FIFO18E1_FIFO18E1 — FIFO18E1 occupies BEL_FIFO18_L (z=10)
+            // in the BRAM tile. Without this, updateBramBel returns early and bts->cells[10]
+            // is never set, making write_bram() unable to find the cell.
+            type != id_RAMB18E1_RAMB18E1 && type != id_FIFO18E1_FIFO18E1)
+
             return;
         auto &tts = tileStatus[bel.tile];
         if (tts.bts == nullptr)

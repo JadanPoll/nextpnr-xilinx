@@ -219,11 +219,20 @@ void get_invertible_pins(Context *ctx, dict<IdString, pool<IdString>> &invertibl
     invertible_pins[id_URAM288_BASE].insert(id_RST_B);
 
     // xc7
-    invertible_pins[id_RAMB18E1].insert(id_CLKARDCLK);
-    invertible_pins[id_RAMB18E1].insert(id_CLKBWRCLK);
-    invertible_pins[id_RAMB18E1].insert(id_ENARDEN);
-    invertible_pins[id_RAMB18E1].insert(id_ENBWREN);
-    invertible_pins[id_RAMB18E1].insert(id_RSTRAMARSTRAM);
+
+    // Nathan: FIFO18E1 invertible pins use physical BRAM DB names (CLKARDCLK etc.),
+    // NOT logical FIFO port names (RDCLK etc.). Physical names confirmed from DB:
+    // BRAM_L.RAMB18_Y0.ZINV_CLKARDCLK 27_107, ZINV_CLKBWRCLK 27_109,
+    // ZINV_ENARDEN 27_112, ZINV_ENBWREN 27_115, ZINV_RSTRAMARSTRAM 27_116.
+    // All 5 confirmed always-set in Vivado ground truth (6 cases).
+    // ZINV_REGCLKARDRCLK handled separately in fasm.cc (DO_REG=1 only).
+    invertible_pins[id_FIFO18E1].insert(id_CLKARDCLK);      // ZINV_CLKARDCLK ✅
+    invertible_pins[id_FIFO18E1].insert(id_CLKBWRCLK);      // ZINV_CLKBWRCLK ✅
+    invertible_pins[id_FIFO18E1].insert(id_ENARDEN);        // ZINV_ENARDEN ✅
+    invertible_pins[id_FIFO18E1].insert(id_ENBWREN);        // ZINV_ENBWREN ✅
+    invertible_pins[id_FIFO18E1].insert(id_RSTRAMARSTRAM);  // ZINV_RSTRAMARSTRAM ✅
+
+
     invertible_pins[id_RAMB18E1].insert(id_RSTRAMB);
     invertible_pins[id_RAMB18E1].insert(id_RSTREGARSTREG);
     invertible_pins[id_RAMB18E1].insert(id_RSTREGB);
@@ -254,12 +263,12 @@ void get_invertible_pins(Context *ctx, dict<IdString, pool<IdString>> &invertibl
     invertible_pins[id_DSP48E1].insert(ctx->id("OPMODE[4]"));
     invertible_pins[id_DSP48E1].insert(ctx->id("OPMODE[5]"));
     invertible_pins[id_DSP48E1].insert(ctx->id("OPMODE[6]"));
-    invertible_pins[id_FIFO18E1].insert(id_RDCLK);
-    invertible_pins[id_FIFO18E1].insert(id_RDEN);
-    invertible_pins[id_FIFO18E1].insert(id_RSTREG);
-    invertible_pins[id_FIFO18E1].insert(id_RST);
-    invertible_pins[id_FIFO18E1].insert(id_WRCLK);
-    invertible_pins[id_FIFO18E1].insert(id_WREN);
+
+    invertible_pins[id_FIFO36E1].insert(id_CLKARDCLK);
+    invertible_pins[id_FIFO36E1].insert(id_CLKBWRCLK);
+    invertible_pins[id_FIFO36E1].insert(id_ENARDEN);
+    invertible_pins[id_FIFO36E1].insert(id_ENBWREN);
+
     invertible_pins[id_FIFO36E1].insert(id_RDCLK);
     invertible_pins[id_FIFO36E1].insert(id_RDEN);
     invertible_pins[id_FIFO36E1].insert(id_RSTREG);

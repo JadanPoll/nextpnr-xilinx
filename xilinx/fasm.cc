@@ -1126,9 +1126,14 @@ struct FasmBackend
             std::string data_rate = str_or_default(ci->params, id_DATA_RATE);
             
             
+
+            // Nathan: IDDR.IN_USE must be set for all ISERDESE2 regardless of DATA_RATE.
+            // The ISERDES primitive is always DDR-capable hardware; Vivado sets this bit
+            // for both SDR and DDR modes. Verified against all 6 fuzzer cases (3 SDR, 3 DDR).
             write_bit("IDDR_OR_ISERDES.IN_USE");
-            if (data_rate == "DDR")
-                write_bit("IDDR.IN_USE");
+            write_bit("IDDR.IN_USE");
+
+
             write_bit("IFF.DDR_CLK_EDGE.OPPOSITE_EDGE");
             write_bit("IFF.SRTYPE.SYNC");
             for (int i = 1; i <= 4; i++) {
@@ -1422,14 +1427,48 @@ struct FasmBackend
         push(get_tile_name(tile));
         push("RAMB18_Y" + std::to_string(half));
         if (ci != nullptr) {
-            bool is_36 = ci->type == id_RAMB36E1_RAMB36E1;
+
+            bool is_36 = (ci->type == id_RAMB36E1_RAMB36E1 || ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1);
+            // Nathan: Implement fifo support
+            //bool is_fifo = ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1;
+
+            // Nathan: is_fifo covers both FIFO36E1 (packed to RAMBFIFO36E1_RAMBFIFO36E1)
+            // and FIFO18E1 (packed to FIFO18E1_FIFO18E1). Controls FIFO_MODE emission
+            // and EN_SYN/FIRST_WORD_FALL_THROUGH at tile level.
+            bool is_fifo = (ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1 || ci->type == id_FIFO18E1_FIFO18E1);
             write_bit("IN_USE");
+
+            // Nathan: Implement fifo support
+            if (is_fifo)
+                write_bit("FIFO_MODE");
+
+            // Nathan: ZINV_REGCLKARDRCLK only emitted when DO_REG=1.
+            // Confirmed from Vivado ground truth: absent for DO_REG=0, present for DO_REG=1
+            // in both FIFO18E1 (6 cases) and FIFO36E1 (8 cases). The register clock path
+            // is only active when the output register is enabled.
+            if (is_fifo && bool_or_default(ci->params, id_DOA_REG, false)) {
+                write_bit("ZINV_REGCLKARDRCLK", true);
+            }
+
             write_bram_width(ci, "READ_WIDTH_A", is_36, half == 1);
             write_bram_width(ci, "READ_WIDTH_B", is_36, half == 1);
-            write_bram_width(ci, "WRITE_WIDTH_A", is_36, half == 1);
+
+            // Nathan: WRITE_WIDTH_A was missing — DB has independent frame bits
+            // (27_51/52/53 for Y0, different from READ_WIDTH_A at 27_35/36/37).
+            // Confirmed never emitted: grep fasm.cc for WRITE_WIDTH_A returns nothing,
+            // out.fasm grep confirms zero emissions. Missing in loc_vs_nextpnr across
+            // hundreds of loc_was_effective=True cases.
+
+
+            write_bram_width(ci, "WRITE_WIDTH_A", is_36, half == 1);  // Nathan: missing call — WRITE_WIDTH_A exists in DB at BRAM_L.RAMB18_Y*.WRITE_WIDTH_A_* but was never called (me personally, im doubtful, theres got to be some odd reason) 
             write_bram_width(ci, "WRITE_WIDTH_B", is_36, half == 1);
             write_bit("DOA_REG", bool_or_default(ci->params, id_DOA_REG, false));
             write_bit("DOB_REG", bool_or_default(ci->params, id_DOB_REG, false));
+            
+            write_bit("RSTREG_PRIORITY_A_RSTREG", str_or_default(ci->params, ctx->id("RSTREG_PRIORITY_A"), "RSTREG") == "RSTREG");
+            write_bit("RSTREG_PRIORITY_B_RSTREG", str_or_default(ci->params, ctx->id("RSTREG_PRIORITY_B"), "RSTREG") == "RSTREG");
+            write_bit("RDADDR_COLLISION_HWCONFIG_DELAYED_WRITE", str_or_default(ci->params, ctx->id("RDADDR_COLLISION_HWCONFIG"), "DELAYED_WRITE") == "DELAYED_WRITE");
+
             for (auto &invpin : invertible_pins[ctx->id(ci->attrs[id_X_ORIG_TYPE].as_string())])
                 write_bit("ZINV_" + invpin.str(ctx),
                           !bool_or_default(ci->params, ctx->id("IS_" + invpin.str(ctx) + "_INVERTED"), false));
@@ -1445,15 +1484,101 @@ struct FasmBackend
 
             write_bram_init(half, ci, is_36);
         }
-        pop();
+
+        pop(); // pops RAMB18_Y*, stack now: [tile_name]
         if (half == 0) {
             auto used_rdaddrcasc = used_wires_starting_with(tile, "BRAM_CASCOUT_ADDRARDADDR", false);
             auto used_wraddrcasc = used_wires_starting_with(tile, "BRAM_CASCOUT_ADDRBWRADDR", false);
             write_bit("CASCOUT_ARD_ACTIVE", !used_rdaddrcasc.empty());
             write_bit("CASCOUT_BWR_ACTIVE", !used_wraddrcasc.empty());
-        }
-        pop();
-    }
+            // Nathan: ZALMOST_*_OFFSET are tile-level bits (no RAMB18_Y* prefix).
+            // DB: BRAM_L.ZALMOST_EMPTY_OFFSET[0..12] 27_288..27_312
+            //     BRAM_L.ZALMOST_FULL_OFFSET[0..12]  27_08..27_32
+            // Push stack here is [tile_name] only — same level as CASCOUT_ARD_ACTIVE
+            // which is confirmed correct by existing code. All-ones = default offset
+            // 0x1FFF (ALMOST_EMPTY_OFFSET=0x0080 inverted across 13 bits).
+            // Vivado emits these on all active BRAM tiles including non-FIFO RAMs.
+            // Written once at half==0 to avoid double-emission (RAMB36 uses both halves).
+
+            // Nathan: ZALMOST_*_OFFSET are tile-level bits but must only be emitted
+            // for tiles with an active cell. Verified: nextpnr was emitting these on
+            // ALL BRAM tiles including empty ones (e.g. BRAM_L_X30Y*) because this
+            // block has no ci != nullptr guard. Vivado does NOT emit ZALMOST on empty
+            // tiles — confirmed by fuzzer EXTRA list showing X30Y* tiles with no placed
+            // cell. Fix: guard with ci != nullptr.
+
+            // Nathan: ZALMOST must invert actual ALMOST_*_OFFSET params, not hardcode all-ones.
+            // Confirmed: default 0x0080 → 13'b1111101111111 (bit 7 clear). Verified across 5 cases.
+            if (ci != nullptr) {
+                auto empty_off = int_or_default(ci->params, ctx->id("ALMOST_EMPTY_OFFSET"), 0x0080);
+                auto full_off  = int_or_default(ci->params, ctx->id("ALMOST_FULL_OFFSET"),  0x0080);
+                std::vector<bool> zalmost_empty, zalmost_full;
+                for (int i = 0; i < 13; i++) {
+                    zalmost_empty.push_back(!((empty_off >> i) & 1));
+                    zalmost_full.push_back(!((full_off >> i) & 1));
+                }
+                write_vector("ZALMOST_EMPTY_OFFSET[12:0]", zalmost_empty);
+                write_vector("ZALMOST_FULL_OFFSET[12:0]", zalmost_full);
+            }
+
+
+            
+
+            // Nathan: RAM_EXTENSION is under BRAM_L.RAMB36.* in DB — requires its own push.
+            // DB: BRAM_L.RAMB36.RAM_EXTENSION_A_NONE_OR_UPPER !27_188
+            //     BRAM_L.RAMB36.RAM_EXTENSION_B_NONE_OR_UPPER !27_187
+            // The ! prefix means fasm2frames CLEARS the bit when this name is emitted.
+            // Default param value "NONE" → condition true → bit emitted → frame bit cleared.
+            // Only RAMB36 has this config; RAMB18 has no RAM_EXTENSION parameter.
+            // half==0 guard prevents double-emission since RAMB36 spans both halves.
+            
+            bool cell_is_36 = (ci != nullptr && (ci->type == id_RAMB36E1_RAMB36E1 || 
+                                      ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1 ||
+                                      ci->type == id_FIFO18E1_FIFO18E1));
+    
+            if (cell_is_36) {
+                push("RAMB36");
+                write_bit("RAM_EXTENSION_A_NONE_OR_UPPER",
+                        str_or_default(ci->params, ctx->id("RAM_EXTENSION_A"), "NONE") == "NONE");
+                write_bit("RAM_EXTENSION_B_NONE_OR_UPPER",
+                        str_or_default(ci->params, ctx->id("RAM_EXTENSION_B"), "NONE") == "NONE");
+
+                // Nathan: BRAM36_READ/WRITE_WIDTH_A_1 set when DATA_WIDTH=9 (READ_WIDTH_A=9,
+                // which halves to actual_width=4 inside write_bram_width with is_36=true).
+                // Confirmed missing from fuzzer: SUSPECT case with DATA_WIDTH=9 shows these missing.
+                // Confirmed present in Vivado ground truth: top_0004/0006 (DATA_WIDTH=9).
+                // DB: BRAM_L.RAMB36.BRAM36_READ_WIDTH_A_1 27_184
+                //     BRAM_L.RAMB36.BRAM36_WRITE_WIDTH_A_1 27_180
+
+
+                int rwa = int_or_default(ci->params, ctx->id("READ_WIDTH_A"), 0);
+                int wwa = int_or_default(ci->params, ctx->id("WRITE_WIDTH_A"), 0);
+                write_bit("BRAM36_READ_WIDTH_A_1", rwa == 9);
+                write_bit("BRAM36_WRITE_WIDTH_A_1", wwa == 9);
+
+
+                pop();
+            }
+
+            // Nathan: EN_SYN and FIRST_WORD_FALL_THROUGH are tile-level bits for FIFO36E1.
+            // EN_SYN confirmed set in all 5 Vivado ground truth cases (EN_SYN=TRUE).
+            // FIRST_WORD_FALL_THROUGH confirmed from DB: BRAM_L.FIRST_WORD_FALL_THROUGH 27_170.
+
+            // Nathan: EN_SYN and FIRST_WORD_FALL_THROUGH are tile-level bits for both
+            // FIFO36E1 and FIFO18E1. Confirmed present in all 6 FIFO18E1 ground truth
+            // cases (EN_SYN=TRUE) and all 8 FIFO36E1 cases.
+            if (ci != nullptr && (ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1 || ci->type == id_FIFO18E1_FIFO18E1)) {
+
+                write_bit("EN_SYN", str_or_default(ci->params, ctx->id("EN_SYN"), "FALSE") == "TRUE");
+                write_bit("FIRST_WORD_FALL_THROUGH", str_or_default(ci->params, ctx->id("FIRST_WORD_FALL_THROUGH"), "FALSE") == "TRUE");
+            }
+
+        } // End of if (half == 0)
+        pop(); // pops tile_name
+        
+    } // End of write_bram_half
+
+
 
     void write_bram()
     {
@@ -1465,9 +1590,22 @@ struct FasmBackend
                 CellInfo *l = nullptr, *u = nullptr;
                 auto bts = ctx->tileStatus[tile].bts;
                 if (bts != nullptr) {
+
                     if (bts->cells[BEL_RAM36] != nullptr) {
                         l = bts->cells[BEL_RAM36];
                         u = bts->cells[BEL_RAM36];
+                    } else if (bts->cells[BEL_RAMFIFO36] != nullptr) {
+                        // Nathan: FIFO36E1 packed to RAMBFIFO36E1_RAMBFIFO36E1 sits in BEL_RAMFIFO36
+                        l = bts->cells[BEL_RAMFIFO36];
+                        u = bts->cells[BEL_RAMFIFO36];
+                    } else if (bts->cells[BEL_FIFO36] != nullptr) {
+                        l = bts->cells[BEL_FIFO36];
+                        u = bts->cells[BEL_FIFO36];
+                    } else if (bts->cells[BEL_FIFO18_L] != nullptr) {
+                        // Nathan: FIFO18E1 sits in BEL_FIFO18_L (lower 18K half only).
+                        // Upper half (u) is nullptr — write_bram_half handles ci=nullptr correctly.
+                        l = bts->cells[BEL_FIFO18_L];
+                        u = nullptr;
                     } else {
                         l = bts->cells[BEL_RAM18_L];
                         u = bts->cells[BEL_RAM18_U];
