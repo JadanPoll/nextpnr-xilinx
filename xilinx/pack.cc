@@ -413,10 +413,72 @@ void XilinxPacker::pack_srls()
     srl_rules[id_SRLC32E].port_xform[id_CE] = id_WE;
     srl_rules[id_SRLC32E].port_xform[id_D] = id_DI1;
     srl_rules[id_SRLC32E].port_xform[id_Q] = id_O6;
+
+    // Nathan: MC31 is the cascade output for SRLC32E chains longer than 32 bits.
+// Connects to DI1 of the next SRLC32E in the chain via fabric routing.
+// Confirmed in constids.inc. Previously marked FIXME by original developers.
+    // nope this is wrong srl_rules[id_SRLC32E].port_xform[id_MC31] = id_MC31;
+    srl_rules[id_SRLC32E].port_xform[ctx->id("Q31")] = id_MC31;
+
     srl_rules[id_SRLC32E].set_attrs.emplace_back(id_X_LUT_AS_SRL, "1");
     // FIXME: Q31 support
     generic_xform(srl_rules, true);
     // Fixup SRL inputs
+
+
+
+    // Find chain starts (SRLC32E with no incoming MC31 from another SRLC32E)
+    for (auto &cell : ctx->cells) {
+        CellInfo *ci = cell.second.get();
+        if (ci->type != id_SLICE_LUTX) continue;
+        if (str_or_default(ci->attrs, id_X_ORIG_TYPE) != "SRLC32E") continue;
+        if (is_constrained(ci)) continue;
+        // Check if this cell is driven by another SRLC32E's MC31
+        // If so, it's not a chain start — skip
+        NetInfo *di1 = ci->getPort(id_DI1);
+        if (di1 != nullptr && di1->driver.cell != nullptr) {
+            CellInfo *drv = di1->driver.cell;
+            if (drv->type == id_SLICE_LUTX &&
+                str_or_default(drv->attrs, id_X_ORIG_TYPE) == "SRLC32E" &&
+                di1->driver.port == id_MC31)
+                continue; // not a chain start
+        }
+        // Walk chain from this start
+        std::vector<CellInfo*> chain;
+        CellInfo *curr = ci;
+        while (curr != nullptr) {
+            chain.push_back(curr);
+            NetInfo *mc31 = curr->getPort(id_MC31);
+            curr = nullptr;
+            if (mc31 != nullptr) {
+                for (auto &usr : mc31->users) {
+                    if (usr.cell->type == id_SLICE_LUTX &&
+                        str_or_default(usr.cell->attrs, id_X_ORIG_TYPE) == "SRLC32E") {
+                        curr = usr.cell;
+                        break;
+                    }
+                }
+            }
+        }
+        if (chain.size() < 2) continue;
+        if (chain.size() > 4)
+            log_error("SRLC32E chain length %d exceeds maximum of 4 per SLICE\n", (int)chain.size());
+        // Assign Z positions: chain[0]=D, chain[1]=C, chain[2]=B, chain[3]=A
+        // Vivado ground truth: D→C→B→A (3<<4 down to 0<<4)
+        int base_lut = 3; // D position for chain start
+        chain[0]->cluster = chain[0]->name;
+        chain[0]->constr_abs_z = true;
+        chain[0]->constr_z = (base_lut << 4) | BEL_6LUT;
+        for (int i = 1; i < (int)chain.size(); i++) {
+            chain[i]->cluster = chain[0]->name;
+            chain[i]->constr_abs_z = true;
+            chain[i]->constr_z = ((base_lut - i) << 4) | BEL_6LUT;
+            chain[i]->constr_x = 0;
+            chain[i]->constr_y = 0;
+            chain[0]->constr_children.push_back(chain[i]);
+        }
+    }
+
     for (auto &cell : ctx->cells) {
         CellInfo *ci = cell.second.get();
         if (ci->type != id_SLICE_LUTX)
