@@ -472,6 +472,17 @@ struct FasmBackend
 
                 if (belname.substr(1) == "DI1MUX") {
                     belname = "DI1MUX";
+
+                    // Nathan: chipdb stores DI1MUX cascade pin names as "BMC31", "CMC31", "DMC31"
+                    // but prjxray segbits DB expects "BDI1_BMC31", "DI_CMC31", "DI_DMC31".
+                    // These are SRLC32E cascade inputs — A-LUT receives from B's MC31,
+                    // B-LUT receives from C's MC31, C-LUT receives from D's MC31.
+                    // Confirmed from segbits_clblm_r.db:
+                    //   ALUT.DI1MUX.BDI1_BMC31, BLUT.DI1MUX.DI_CMC31, CLUT.DI1MUX.DI_DMC31
+
+                    if (pinname == "BMC31") pinname = "BDI1_BMC31";
+                    else if (pinname == "CMC31") pinname = "DI_CMC31";
+                    else if (pinname == "DMC31") pinname = "DI_DMC31";
                 }
 
                 if (belname.substr(1) == "CY0") {
