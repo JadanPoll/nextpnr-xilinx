@@ -48,3 +48,7 @@ install_manifest.txt
 *.bba
 __pycache__/
 *.pyc
+.Xil/
+vivado*.jou
+vivado*.log
+clockInfo.txt
