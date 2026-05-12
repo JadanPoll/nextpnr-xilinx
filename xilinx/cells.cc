@@ -152,7 +152,29 @@ std::unique_ptr<CellInfo> create_cell(Context *ctx, IdString type, IdString name
             add_port("CO[" + std::to_string(i) + "]", PORT_OUT);
             add_port("O[" + std::to_string(i) + "]", PORT_OUT);
         }
+    } 
+    // Nathan: BUFR (Regional Clock Buffer) port definitions.
+    // Physical pins match logical ports exactly — CE/CLR/I inputs, O output.
+    // Confirmed from prjxray-db/spartan7/site_type_BUFR.json and Vivado ground truth.
+    // BEL format: BUFR_X#Y#/BUFR (e.g. BUFR_X0Y1/BUFR).
+     else if (type == id_BUFR_BUFR) {
+        add_port("I", PORT_IN);
+        add_port("O", PORT_OUT);
+        add_port("CE", PORT_IN);
+        add_port("CLR", PORT_IN);
+    } 
+    // Nathan: BUFIO (Regional Clock IO Buffer) port definitions.
+    // Only I (input) and O (output) — no CE or CLR unlike BUFR.
+    // Confirmed from prjxray-db/spartan7/site_type_BUFIO.json site_pins.
+    // BEL format: BUFIO_X#Y#/BUFIO (e.g. BUFIO_X0Y9/BUFIO).
+    // Confirmed from Vivado: get_bels -of_objects [get_sites -filter {SITE_TYPE==BUFIO}].
+    
+    else if (type == id_BUFIO_BUFIO) {
+        add_port("I", PORT_IN);
+        add_port("O", PORT_OUT);
     }
+
+
     return cell;
 }
 

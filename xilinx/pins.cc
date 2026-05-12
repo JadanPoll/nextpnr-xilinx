@@ -219,11 +219,20 @@ void get_invertible_pins(Context *ctx, dict<IdString, pool<IdString>> &invertibl
     invertible_pins[id_URAM288_BASE].insert(id_RST_B);
 
     // xc7
-    invertible_pins[id_RAMB18E1].insert(id_CLKARDCLK);
-    invertible_pins[id_RAMB18E1].insert(id_CLKBWRCLK);
-    invertible_pins[id_RAMB18E1].insert(id_ENARDEN);
-    invertible_pins[id_RAMB18E1].insert(id_ENBWREN);
-    invertible_pins[id_RAMB18E1].insert(id_RSTRAMARSTRAM);
+
+    // Nathan: FIFO18E1 invertible pins use physical BRAM DB names (CLKARDCLK etc.),
+    // NOT logical FIFO port names (RDCLK etc.). Physical names confirmed from DB:
+    // BRAM_L.RAMB18_Y0.ZINV_CLKARDCLK 27_107, ZINV_CLKBWRCLK 27_109,
+    // ZINV_ENARDEN 27_112, ZINV_ENBWREN 27_115, ZINV_RSTRAMARSTRAM 27_116.
+    // All 5 confirmed always-set in Vivado ground truth (6 cases).
+    // ZINV_REGCLKARDRCLK handled separately in fasm.cc (DO_REG=1 only).
+    invertible_pins[id_FIFO18E1].insert(id_CLKARDCLK);      // ZINV_CLKARDCLK ✅
+    invertible_pins[id_FIFO18E1].insert(id_CLKBWRCLK);      // ZINV_CLKBWRCLK ✅
+    invertible_pins[id_FIFO18E1].insert(id_ENARDEN);        // ZINV_ENARDEN ✅
+    invertible_pins[id_FIFO18E1].insert(id_ENBWREN);        // ZINV_ENBWREN ✅
+    invertible_pins[id_FIFO18E1].insert(id_RSTRAMARSTRAM);  // ZINV_RSTRAMARSTRAM ✅
+
+
     invertible_pins[id_RAMB18E1].insert(id_RSTRAMB);
     invertible_pins[id_RAMB18E1].insert(id_RSTREGARSTREG);
     invertible_pins[id_RAMB18E1].insert(id_RSTREGB);
@@ -254,12 +263,12 @@ void get_invertible_pins(Context *ctx, dict<IdString, pool<IdString>> &invertibl
     invertible_pins[id_DSP48E1].insert(ctx->id("OPMODE[4]"));
     invertible_pins[id_DSP48E1].insert(ctx->id("OPMODE[5]"));
     invertible_pins[id_DSP48E1].insert(ctx->id("OPMODE[6]"));
-    invertible_pins[id_FIFO18E1].insert(id_RDCLK);
-    invertible_pins[id_FIFO18E1].insert(id_RDEN);
-    invertible_pins[id_FIFO18E1].insert(id_RSTREG);
-    invertible_pins[id_FIFO18E1].insert(id_RST);
-    invertible_pins[id_FIFO18E1].insert(id_WRCLK);
-    invertible_pins[id_FIFO18E1].insert(id_WREN);
+
+    invertible_pins[id_FIFO36E1].insert(id_CLKARDCLK);
+    invertible_pins[id_FIFO36E1].insert(id_CLKBWRCLK);
+    invertible_pins[id_FIFO36E1].insert(id_ENARDEN);
+    invertible_pins[id_FIFO36E1].insert(id_ENBWREN);
+
     invertible_pins[id_FIFO36E1].insert(id_RDCLK);
     invertible_pins[id_FIFO36E1].insert(id_RDEN);
     invertible_pins[id_FIFO36E1].insert(id_RSTREG);
@@ -313,11 +322,28 @@ void get_invertible_pins(Context *ctx, dict<IdString, pool<IdString>> &invertibl
     invertible_pins[id_IDDR_2CLK].insert(id_C);
     // invertible_pins[id_IDDR_2CLK].insert(id_D);
     invertible_pins[id_IDELAYE2].insert(id_C);
-    invertible_pins[id_IDELAYE2].insert(id_IDATAIN);
+    // Nathan: invertible_pins[id_IDELAYE2].insert(id_IDATAIN);
+
+    // Nathan: IDATAIN (IDELAYE2): same problem. The chipdb has no routing arc from
+    // PSEUDO_VCC to IDELAY/IDATAIN, so tying it low triggers the invertible_pins
+    // optimization and then a router abort. IDATAIN must always be driven by a
+    // real INBUF — pack_iologic() enforces this with an explicit log_error() check.
+    // Having it here in invertible_pins is therefore both wrong and redundant
+
     invertible_pins[id_ODELAYE2].insert(id_C);
     invertible_pins[id_ODELAYE2].insert(id_ODATAIN);
     invertible_pins[id_ISERDESE2].insert(id_CLKB);
-    invertible_pins[id_ISERDESE2].insert(id_CLKDIVP);
+    
+    
+    //Nathan: invertible_pins[id_ISERDESE2].insert(id_CLKDIVP);
+    // Nathan: CLKDIVP (ISERDESE2): no IS_CLKDIVP_INVERTED parameter exists in hardware;
+    // the inversion is structural only (MEMORY_DDR3 mode). More critically, the
+    // chipdb has no routing arc from PSEUDO_VCC to ILOGIC/CLKDIVPINV_OUT, so the
+    // invertible_pins optimization (GND->VCC+inversion) causes a router abort on
+    // any design that ties CLKDIVP low. Leave absent so pack_constants() never
+    // touches it.
+
+
     invertible_pins[id_ISERDESE2].insert(id_CLKDIV);
     invertible_pins[id_ISERDESE2].insert(id_CLK);
     // invertible_pins[id_ISERDESE2].insert(id_D);
@@ -496,6 +522,14 @@ void get_tied_pins(Context *ctx, dict<IdString, dict<IdString, bool>> &tied_pins
     tied_pins[id_IDELAYE2][id_LDPIPEEN] = false;
     tied_pins[id_IDELAYE2][id_CINVCTRL] = false;
 
+    // Nathan:ISERDESE2: pins below are configuration-dependent and must never be
+    // auto-tied by pack_constants(). SHIFTIN1/2 are only valid in SLAVE
+    // cascade. DDLY is only valid when IOBDELAY=IFD (must be driven by
+    // IDELAYE2 DATAOUT). CLKDIVP is only valid in MEMORY_DDR3 mode and
+    // has no constant routing arc in the chipdb.
+    // Leaving these absent from tied_pins ensures pack_constants() never
+    // assigns PSEUDO_GND/PSEUDO_VCC to them.
+    
     // IO primitives
     tied_pins[id_IOBUFDSE3][id_DCITERMDISABLE] = false;
     tied_pins[id_IOBUFDSE3][ctx->id("OSC_EN[0]")] = false;

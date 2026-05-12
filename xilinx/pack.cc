@@ -413,10 +413,72 @@ void XilinxPacker::pack_srls()
     srl_rules[id_SRLC32E].port_xform[id_CE] = id_WE;
     srl_rules[id_SRLC32E].port_xform[id_D] = id_DI1;
     srl_rules[id_SRLC32E].port_xform[id_Q] = id_O6;
+
+    // Nathan: MC31 is the cascade output for SRLC32E chains longer than 32 bits.
+// Connects to DI1 of the next SRLC32E in the chain via fabric routing.
+// Confirmed in constids.inc. Previously marked FIXME by original developers.
+    // nope this is wrong srl_rules[id_SRLC32E].port_xform[id_MC31] = id_MC31;
+    srl_rules[id_SRLC32E].port_xform[ctx->id("Q31")] = id_MC31;
+
     srl_rules[id_SRLC32E].set_attrs.emplace_back(id_X_LUT_AS_SRL, "1");
     // FIXME: Q31 support
     generic_xform(srl_rules, true);
     // Fixup SRL inputs
+
+
+
+    // Find chain starts (SRLC32E with no incoming MC31 from another SRLC32E)
+    for (auto &cell : ctx->cells) {
+        CellInfo *ci = cell.second.get();
+        if (ci->type != id_SLICE_LUTX) continue;
+        if (str_or_default(ci->attrs, id_X_ORIG_TYPE) != "SRLC32E") continue;
+        if (is_constrained(ci)) continue;
+        // Check if this cell is driven by another SRLC32E's MC31
+        // If so, it's not a chain start — skip
+        NetInfo *di1 = ci->getPort(id_DI1);
+        if (di1 != nullptr && di1->driver.cell != nullptr) {
+            CellInfo *drv = di1->driver.cell;
+            if (drv->type == id_SLICE_LUTX &&
+                str_or_default(drv->attrs, id_X_ORIG_TYPE) == "SRLC32E" &&
+                di1->driver.port == id_MC31)
+                continue; // not a chain start
+        }
+        // Walk chain from this start
+        std::vector<CellInfo*> chain;
+        CellInfo *curr = ci;
+        while (curr != nullptr) {
+            chain.push_back(curr);
+            NetInfo *mc31 = curr->getPort(id_MC31);
+            curr = nullptr;
+            if (mc31 != nullptr) {
+                for (auto &usr : mc31->users) {
+                    if (usr.cell->type == id_SLICE_LUTX &&
+                        str_or_default(usr.cell->attrs, id_X_ORIG_TYPE) == "SRLC32E") {
+                        curr = usr.cell;
+                        break;
+                    }
+                }
+            }
+        }
+        if (chain.size() < 2) continue;
+        if (chain.size() > 4)
+            log_error("SRLC32E chain length %d exceeds maximum of 4 per SLICE\n", (int)chain.size());
+        // Assign Z positions: chain[0]=D, chain[1]=C, chain[2]=B, chain[3]=A
+        // Vivado ground truth: D→C→B→A (3<<4 down to 0<<4)
+        int base_lut = 3; // D position for chain start
+        chain[0]->cluster = chain[0]->name;
+        chain[0]->constr_abs_z = true;
+        chain[0]->constr_z = (base_lut << 4) | BEL_6LUT;
+        for (int i = 1; i < (int)chain.size(); i++) {
+            chain[i]->cluster = chain[0]->name;
+            chain[i]->constr_abs_z = true;
+            chain[i]->constr_z = ((base_lut - i) << 4) | BEL_6LUT;
+            chain[i]->constr_x = 0;
+            chain[i]->constr_y = 0;
+            chain[0]->constr_children.push_back(chain[i]);
+        }
+    }
+
     for (auto &cell : ctx->cells) {
         CellInfo *ci = cell.second.get();
         if (ci->type != id_SLICE_LUTX)
@@ -709,6 +771,63 @@ void XC7Packer::pack_bram()
     bram_rules[id_RAMB36E1].port_multixform[ctx->id("ADDRARDADDR[15]")].push_back(id_ADDRARDADDRL15);
     bram_rules[id_RAMB36E1].port_multixform[ctx->id("ADDRBWRADDR[15]")].push_back(id_ADDRBWRADDRL15);
 
+
+
+
+    // ==============================================================================
+    // INSERT FIFO36E1 BLOCK HERE
+    // ==============================================================================
+    // Nathan: FIFO36E1 → FIFO36E1_FIFO36E1, maps to RAMBFIFO36E1 BEL.
+    // BEL pins confirmed from Vivado TCL: get_bel_pins RAMB36_X0Y0/RAMBFIFO36E1.
+    bram_rules[id_FIFO36E1].new_type =  id_RAMBFIFO36E1_RAMBFIFO36E1;
+    bram_rules[id_FIFO36E1].port_multixform[id_RDCLK]  = {ctx->id("CLKARDCLKL"),  ctx->id("CLKARDCLKU")};
+    bram_rules[id_FIFO36E1].port_multixform[id_WRCLK]  = {ctx->id("CLKBWRCLKL"),  ctx->id("CLKBWRCLKU")};
+    bram_rules[id_FIFO36E1].port_multixform[id_RDEN]   = {ctx->id("ENARDENL"),    ctx->id("ENARDENU")};
+    bram_rules[id_FIFO36E1].port_multixform[id_WREN]   = {ctx->id("ENBWRENL"),    ctx->id("ENBWRENU")};
+    bram_rules[id_FIFO36E1].port_multixform[id_RST]    = {ctx->id("RSTRAMARSTRAMLRST"), ctx->id("RSTRAMARSTRAMU")};
+    bram_rules[id_FIFO36E1].port_multixform[id_RSTREG] = {ctx->id("RSTREGARSTREGL"), ctx->id("RSTREGARSTREGU")};
+    bram_rules[id_FIFO36E1].port_multixform[ctx->id("REGCE")]  = {ctx->id("REGCEAREGCEL"), ctx->id("REGCEAREGCEU")};
+    // Lower 32 bits (Port A)
+        for (int i = 0; i < 32; i++)
+            bram_rules[id_FIFO36E1].port_multixform[ctx->id("DI[" + std::to_string(i) + "]")] = {ctx->id("DIADI" + std::to_string(i))};
+        for (int i = 0; i < 4; i++)
+            bram_rules[id_FIFO36E1].port_multixform[ctx->id("DIP[" + std::to_string(i) + "]")] = {ctx->id("DIPADIP" + std::to_string(i))};
+        for (int i = 0; i < 32; i++)
+            bram_rules[id_FIFO36E1].port_multixform[ctx->id("DO[" + std::to_string(i) + "]")] = {ctx->id("DOADO" + std::to_string(i))};
+        for (int i = 0; i < 4; i++)
+            bram_rules[id_FIFO36E1].port_multixform[ctx->id("DOP[" + std::to_string(i) + "]")] = {ctx->id("DOPADOP" + std::to_string(i))};
+
+        // Upper 32 bits (Port B) - ADDED HERE
+        for (int i = 0; i < 32; i++)
+            bram_rules[id_FIFO36E1].port_multixform[ctx->id("DI[" + std::to_string(i+32) + "]")] = {ctx->id("DIBDI" + std::to_string(i))};
+        for (int i = 0; i < 4; i++)
+            bram_rules[id_FIFO36E1].port_multixform[ctx->id("DIP[" + std::to_string(i+4) + "]")] = {ctx->id("DIPBDIP" + std::to_string(i))};
+        for (int i = 0; i < 32; i++)
+            bram_rules[id_FIFO36E1].port_multixform[ctx->id("DO[" + std::to_string(i+32) + "]")] = {ctx->id("DOBDO" + std::to_string(i))};
+        for (int i = 0; i < 4; i++)
+            bram_rules[id_FIFO36E1].port_multixform[ctx->id("DOP[" + std::to_string(i+4) + "]")] = {ctx->id("DOPBDOP" + std::to_string(i))};
+
+
+    // ==============================================================================
+
+
+    bram_rules[id_FIFO18E1].new_type = id_FIFO18E1_FIFO18E1;
+    // No clock/enable remapping needed - FIFO18E1 BEL uses logical names directly
+    for (int i = 0; i < 16; i++)
+        bram_rules[id_FIFO18E1].port_multixform[ctx->id("DI[" + std::to_string(i) + "]")] = {ctx->id("DIADI" + std::to_string(i))};
+    for (int i = 0; i < 16; i++)
+        bram_rules[id_FIFO18E1].port_multixform[ctx->id("DI[" + std::to_string(i+16) + "]")] = {ctx->id("DIBDI" + std::to_string(i))};
+    for (int i = 0; i < 2; i++)
+        bram_rules[id_FIFO18E1].port_multixform[ctx->id("DIP[" + std::to_string(i) + "]")] = {ctx->id("DIPADIP" + std::to_string(i))};
+    for (int i = 0; i < 2; i++)
+        bram_rules[id_FIFO18E1].port_multixform[ctx->id("DIP[" + std::to_string(i+2) + "]")] = {ctx->id("DIPBDIP" + std::to_string(i))};
+    for (int i = 0; i < 32; i++)
+        bram_rules[id_FIFO18E1].port_multixform[ctx->id("DO[" + std::to_string(i) + "]")] = {ctx->id("DO" + std::to_string(i))};
+    for (int i = 0; i < 4; i++)
+        bram_rules[id_FIFO18E1].port_multixform[ctx->id("DOP[" + std::to_string(i) + "]")] = {ctx->id("DOP" + std::to_string(i))};
+
+
+
     // Special rules for SDP rules, relating to WE connectivity
     dict<IdString, XFormRule> sdp_bram_rules = bram_rules;
     for (int i = 0; i < 4; i++) {
@@ -774,6 +893,68 @@ void XC7Packer::pack_bram()
     }
 
     generic_xform(bram_rules, false);
+
+
+
+    // Nathan: FIFO36E1 uses DATA_WIDTH/DO_REG instead of BRAM-style READ_WIDTH_A/DOA_REG.
+    // Synthesize equivalent BRAM params after packing so write_bram_half can use them.
+    // Width mapping confirmed from Vivado ground truth (8 cases):
+    //   DATA_WIDTH=4  → READ_WIDTH_A=2, WRITE_WIDTH_B=2
+    //   DATA_WIDTH=9  → READ_WIDTH_A=4, WRITE_WIDTH_B=4  (9/2=4 integer division)
+    //   DATA_WIDTH=18 → READ_WIDTH_A=9, WRITE_WIDTH_B=9
+    //   DATA_WIDTH=36 → READ_WIDTH_A=18, WRITE_WIDTH_B=18
+    // WRITE_WIDTH_A=1, READ_WIDTH_B=1 always (FIFO read/write share same port).
+    // WRITE_MODE=NO_CHANGE confirmed in all 8 cases.
+    for (auto &cell : ctx->cells) {
+        CellInfo *ci = cell.second.get();
+        if (ci->type != id_RAMBFIFO36E1_RAMBFIFO36E1) continue;
+        if (!ci->params.count(ctx->id("DATA_WIDTH"))) continue;
+        
+
+        int dw = int_or_default(ci->params, ctx->id("DATA_WIDTH"), 4);
+        int do_reg = int_or_default(ci->params, ctx->id("DO_REG"), 0);
+
+        int half_width = dw;  // write_bram_width handles the /2 internally when is_36=true
+        ci->params[ctx->id("READ_WIDTH_A")]  = Property(half_width);
+        ci->params[ctx->id("WRITE_WIDTH_B")] = Property(half_width);
+        ci->params[ctx->id("READ_WIDTH_B")]  = Property(1);
+        ci->params[id_WRITE_WIDTH_A]         = Property(1);
+        
+        ci->params[id_WRITE_WIDTH_B]         = Property(half_width);
+        ci->params[id_DOA_REG]               = Property(do_reg);
+        ci->params[id_DOB_REG]               = Property(do_reg);
+        ci->params[ctx->id("WRITE_MODE_A")]  = Property(std::string("NO_CHANGE"));
+        ci->params[ctx->id("WRITE_MODE_B")]  = Property(std::string("NO_CHANGE"));
+    }
+
+
+    // Nathan: FIFO18E1 uses DATA_WIDTH/DO_REG instead of BRAM-style params.
+    // Unlike FIFO36E1, NO halving — FIFO18E1 is a single 18K block.
+    // Width mapping confirmed from Vivado ground truth (6 cases):
+    //   DATA_WIDTH=4  → READ_WIDTH_A=4,  WRITE_WIDTH_B=4
+    //   DATA_WIDTH=9  → READ_WIDTH_A=9,  WRITE_WIDTH_B=9
+    //   DATA_WIDTH=18 → READ_WIDTH_A=18, WRITE_WIDTH_B=18
+    // WRITE_WIDTH_A=1, READ_WIDTH_B=1 always (FIFO read port is port A only).
+    // WRITE_MODE=NO_CHANGE confirmed in all 6 cases.
+
+    // FIFO18E1: DATA_WIDTH maps directly (no halving since single 18K block)
+    for (auto &cell : ctx->cells) {
+        CellInfo *ci = cell.second.get();
+        if (ci->type != id_FIFO18E1_FIFO18E1) continue;
+        if (!ci->params.count(ctx->id("DATA_WIDTH"))) continue;
+        int dw = int_or_default(ci->params, ctx->id("DATA_WIDTH"), 4);
+        int do_reg = int_or_default(ci->params, ctx->id("DO_REG"), 0);
+        ci->params[ctx->id("READ_WIDTH_A")]  = Property(dw);
+        ci->params[ctx->id("READ_WIDTH_B")]  = Property(1);
+        ci->params[id_WRITE_WIDTH_A]         = Property(1);
+        ci->params[id_WRITE_WIDTH_B]         = Property(dw);
+        ci->params[id_DOA_REG]               = Property(do_reg);
+        ci->params[id_DOB_REG]               = Property(do_reg);
+        ci->params[ctx->id("WRITE_MODE_A")]  = Property(std::string("NO_CHANGE"));
+        ci->params[ctx->id("WRITE_MODE_B")]  = Property(std::string("NO_CHANGE"));
+    }
+
+
 
     // These pins have no logical mapping, so must be tied after transformation
     for (auto &cell : ctx->cells) {
