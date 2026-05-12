@@ -240,17 +240,29 @@ struct FasmBackend
         // site internal pips here.
         if (pd.flags == PIP_SITE_INTERNAL) {
             if (src.str(ctx) == "T1" && dst.str(ctx) == "T1INV_OUT") {
-                auto srcwire_uphill_iter = ctx->getPipsUphill(ctx->getPipSrcWire(pip));
-                auto uphill = srcwire_uphill_iter.begin();
-                if (uphill != srcwire_uphill_iter.end()) {
-                    // source wire should be like: LIOI3_X0Y73/IOI_OLOGIC1_T1
-                    auto loc = ctx->getWireName(ctx->getPipSrcWire(*uphill)).str(ctx);
-                    boost::replace_all(loc, "/", ".");
-                    boost::erase_all(loc, "_T1");
-                    boost::replace_all(loc, "IOI_OLOGIC", "OLOGIC_Y");
-                    // the replacements transformed it into : LIOI3_X0Y73.OLOGIC_Y1
-                    if (debug_this) std::cerr << "writing bit " << loc << "." << "ZINV_T1" << std::endl;
-                    out << loc << "." << "ZINV_T1" << std::endl;
+                // Nathan: only emit ZINV_T1 when T1 is driven by a real signal, not GND.
+                // Vivado does not set ZINV_T1 when T1=GND (e.g. DATA_RATE_TQ=BUF, TRISTATE_WIDTH=1).
+                // $PACKER_GND_NET confirmed as GND net name in pack.cc/pack_carry_xc7.cc.
+                // Verified: ZINV_T1 in extra for all 6 OSERDESE2 fuzzer cases with T1=GND.
+                auto src_wire = ctx->getPipSrcWire(pip);
+                auto *src_net = ctx->getBoundWireNet(src_wire);
+                // Nathan: T1=GND in HDL becomes $PACKER_VCC_NET after synthesis (inversion absorbed).
+                // Vivado does not set ZINV_T1 when T1 is tied to a constant.
+                // Verified: T1 wire carries $PACKER_VCC_NET when T1=1'b0 in HDL.
+                bool is_const = (src_net != nullptr && 
+                    (src_net->name == ctx->id("$PACKER_GND_NET") || 
+                     src_net->name == ctx->id("$PACKER_VCC_NET")));
+                if (!is_const) {
+                    auto srcwire_uphill_iter = ctx->getPipsUphill(src_wire);
+                    auto uphill = srcwire_uphill_iter.begin();
+                    if (uphill != srcwire_uphill_iter.end()) {
+                        auto loc = ctx->getWireName(ctx->getPipSrcWire(*uphill)).str(ctx);
+                        boost::replace_all(loc, "/", ".");
+                        boost::erase_all(loc, "_T1");
+                        boost::replace_all(loc, "IOI_OLOGIC", "OLOGIC_Y");
+                        if (debug_this) std::cerr << "writing bit " << loc << "." << "ZINV_T1" << std::endl;
+                        out << loc << "." << "ZINV_T1" << std::endl;
+                    }
                 }
             }
             return;
@@ -292,6 +304,20 @@ struct FasmBackend
                 // FIXME: PPIPs missing for DSPs
                 return;
             }
+            if (boost::starts_with(tile_name, "CMT_TOP_R") && boost::contains(dst_name, "CLK_PERF")) {
+                // CLK_PERF pips bound by routeClock but absent from prjxray spartan7 DB
+                return;
+            }
+            // Nathan: CLK_FREQ_BB*_NS pips absent from prjxray spartan7 DB for both
+            // CMT_TOP_R_LOWER_B (MMCM) and CMT_TOP_R_UPPER_T (PLL).
+            if (boost::starts_with(tile_name, "CMT_TOP_R") && boost::contains(dst_name, "CLK_FREQ_BB")) {
+                return;
+            }
+            if (boost::starts_with(tile_name, "HCLK_CMT") && boost::contains(dst_name, "PHSR_PERFCLK")) {
+                // PHSR_PERFCLK pips bound by routeClock but absent from prjxray spartan7 DB
+                return;
+            }
+
             std::string orig_dst_name = dst_name;
             if (boost::starts_with(tile_name, "RIOI3_SING") || boost::starts_with(tile_name, "LIOI3_SING") ||
                 boost::starts_with(tile_name, "RIOI_SING")) {
@@ -446,6 +472,17 @@ struct FasmBackend
 
                 if (belname.substr(1) == "DI1MUX") {
                     belname = "DI1MUX";
+
+                    // Nathan: chipdb stores DI1MUX cascade pin names as "BMC31", "CMC31", "DMC31"
+                    // but prjxray segbits DB expects "BDI1_BMC31", "DI_CMC31", "DI_DMC31".
+                    // These are SRLC32E cascade inputs — A-LUT receives from B's MC31,
+                    // B-LUT receives from C's MC31, C-LUT receives from D's MC31.
+                    // Confirmed from segbits_clblm_r.db:
+                    //   ALUT.DI1MUX.BDI1_BMC31, BLUT.DI1MUX.DI_CMC31, CLUT.DI1MUX.DI_DMC31
+
+                    if (pinname == "BMC31") pinname = "BDI1_BMC31";
+                    else if (pinname == "CMC31") pinname = "DI_CMC31";
+                    else if (pinname == "DMC31") pinname = "DI_DMC31";
                 }
 
                 if (belname.substr(1) == "CY0") {
@@ -935,8 +972,17 @@ struct FasmBackend
         else
             inv = ctx->getBelByNameStr(site + "/IOB33S/O_ININV");
 
-        if (inv != BelId() && ctx->getBoundBelCell(inv) != nullptr)
-            write_bit("OUT_DIFF");
+
+        // Nathan: OUT_DIFF set for DIFF_* iostandards on xc7 HR (e.g. DIFF_SSTL135).
+        // Not set for LVDS_25/TMDS_33 (only_diff). Confirmed from Vivado ground truth.
+        // For IOB18 HP banks, still use O_ININV cell check.
+        if (is_riob18) {
+            if (inv != BelId() && ctx->getBoundBelCell(inv) != nullptr)
+                write_bit("OUT_DIFF");
+        } else {
+            if (is_output && is_diff && has_diff_prefix && yLoc == 0)
+                write_bit("OUT_DIFF");
+        }
 
         if (is_stepdown && !is_sing)
             write_bit("IOB_Y" + std::to_string(ioLoc.y) + ".LVCMOS12_LVCMOS15_LVCMOS18_SSTL135_SSTL15.STEPDOWN");
@@ -946,6 +992,7 @@ struct FasmBackend
 
     void write_iol_config(CellInfo *ci)
     {
+        
         std::string tile = get_tile_name(ci->bel.tile);
         push(tile);
         bool is_sing = boost::contains(tile, "_SING_");
@@ -953,7 +1000,19 @@ struct FasmBackend
 
         std::string site = ctx->getBelSite(ci->bel);
         std::string sitetype = site.substr(0, site.find('_'));
+
+
+        // Nathan: IMPORTANT VERY CAUTIOUS FIX CAUSE THIS NEEDS TO BE THE MATCH. MIGHT REVERT
+        // Nathan: prjxray DB uses ILOGIC/OLOGIC not ILOGICE3/OLOGICE3
+        if (sitetype == "ILOGICE3") sitetype = "ILOGIC";
+        else if (sitetype == "OLOGICE3") sitetype = "OLOGIC";
+        ////////////////////////////////////
+
+
         Loc siteloc = ctx->getSiteLocInTile(ci->bel);
+
+
+
         push(sitetype + "_Y" + std::to_string(is_sing ? (is_top_sing ? 1 : 0) : (1 - siteloc.y)));
 
         if (ci->type == id_ILOGICE3_IFF) {
@@ -1040,8 +1099,11 @@ struct FasmBackend
             write_bit("ODDR_TDDR.IN_USE");
             write_bit("OQUSED", ci->getPort(id_OQ) != nullptr);
             write_bit("ZINV_CLK", !bool_or_default(ci->params, id_IS_CLK_INVERTED, false));
+            // Nathan: ZINV_T1 is written via PIP_SITE_INTERNAL in write_pip when T1->T1INV_OUT
+            // pip is bound. Removed "|| t == T1" special case — Vivado does not set ZINV_T1
+            // when T1 is tied to GND. Verified against fuzzer: ZINV_T1 in extra for all 6 OSERDESE2 cases.
             for (std::string t : {"T1", "T2", "T3", "T4"})
-                write_bit("ZINV_" + t, (ci->getPort(ctx->id(t)) != nullptr || t == "T1") &&
+                write_bit("ZINV_" + t, ci->getPort(ctx->id(t)) != nullptr &&
                                                !bool_or_default(ci->params, ctx->id("IS_" + t + "_INVERTED"), false));
             for (std::string d : {"D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8"})
                 write_bit("IS_" + d + "_INVERTED",
@@ -1078,10 +1140,20 @@ struct FasmBackend
             write_bit("TSRTYPE.SYNC");
             pop();
         } else if (ci->type == id_ISERDESE2_ISERDESE2) {
+            
+
+
             std::string data_rate = str_or_default(ci->params, id_DATA_RATE);
+            
+            
+
+            // Nathan: IDDR.IN_USE must be set for all ISERDESE2 regardless of DATA_RATE.
+            // The ISERDES primitive is always DDR-capable hardware; Vivado sets this bit
+            // for both SDR and DDR modes. Verified against all 6 fuzzer cases (3 SDR, 3 DDR).
             write_bit("IDDR_OR_ISERDES.IN_USE");
-            if (data_rate == "DDR")
-                write_bit("IDDR.IN_USE");
+            write_bit("IDDR.IN_USE");
+
+
             write_bit("IFF.DDR_CLK_EDGE.OPPOSITE_EDGE");
             write_bit("IFF.SRTYPE.SYNC");
             for (int i = 1; i <= 4; i++) {
@@ -1095,6 +1167,15 @@ struct FasmBackend
 
             std::string iobdelay = str_or_default(ci->params, id_IOBDELAY, "NONE");
             write_bit("IFFDELMUXE3.P0", (iobdelay == "IFD"));
+            // Nathan: IDELMUXE3 mux: P1=direct path, P0=IDELAY path.
+            // Mirrors ILOGICE3_IFF logic exactly: check if D port is driven by IDELAYE2.
+            // DB: LIOI3.ILOGIC_Y0.IDELMUXE3.P1 !29_101 (inverted bit)
+            {
+                NetInfo *d_net = ci->getPort(id_D);
+                bool d_from_idelay = (d_net != nullptr && d_net->driver.cell != nullptr &&
+                    boost::contains(d_net->driver.cell->type.str(ctx), "IDELAYE2"));
+                write_bit("IDELMUXE3.P1", !d_from_idelay);
+            }
             write_bit("ZINV_D", !bool_or_default(ci->params, id_IS_D_INVERTED, false) && (iobdelay != "IFD"));
 
             push("ISERDES");
@@ -1199,6 +1280,8 @@ struct FasmBackend
                 write_pll(ci);
             } else if (ci->type == id_MMCME2_ADV_MMCME2_ADV) {
                 write_mmcm(ci);
+            } else if (ci->type == id_XADC) {
+                write_xadc(ci);
             }
             blank();
         }
@@ -1239,6 +1322,38 @@ struct FasmBackend
                     if (boost::contains(s, "BUFHCLK")) {
                         write_bit(s + "_USED");
                         hclk_by_row[tile / ctx->chip_info->width].insert(s.substr(s.find("BUFHCLK")));
+                    }
+                }
+                // Nathan: emit MUX_CLK_0 mux selection for MMCM/PLL clock output distribution.
+                // nextpnr does not bind the HCLK_CMT_MUX_CLK pip, so we detect MMCM/PLL cells
+                // by tile name Y coordinate offset. Verified exhaustively against xc7s50 tilegrid:
+                //   HCLK_CMT name-Y = MMCM LOWER_B name-Y + 17  (all 5 LOWER_B tiles confirmed)
+                //   HCLK_CMT name-Y = PLL  UPPER_T name-Y - 18  (all 5 UPPER_T tiles confirmed)
+                // Both L and R side variants confirmed. DB entries verified:
+                //   HCLK_CMT.HCLK_CMT_MUX_CLK_0.HCLK_CMT_MUX_CLK_MMCM0 27_149 27_154
+                //   HCLK_CMT.HCLK_CMT_MUX_CLK_0.HCLK_CMT_MUX_CLK_PLL0  26_149 27_155
+                {
+                    int hclk_x = -1, hclk_y = -1;
+                    bool parsed = (sscanf(name.c_str(), "HCLK_CMT_X%dY%d", &hclk_x, &hclk_y) == 2 ||
+                                   sscanf(name.c_str(), "HCLK_CMT_L_X%dY%d", &hclk_x, &hclk_y) == 2);
+                    if (parsed) {
+                        for (auto &cell2 : ctx->cells) {
+                            CellInfo *ci2 = cell2.second.get();
+                            if (ci2->bel == BelId()) continue;
+                            std::string cmt_tile = get_tile_name(ci2->bel.tile);
+                            int cmt_x = -1, cmt_y = -1;
+                            if (ci2->type == id_MMCME2_ADV_MMCME2_ADV) {
+                                if ((sscanf(cmt_tile.c_str(), "CMT_TOP_R_LOWER_B_X%dY%d", &cmt_x, &cmt_y) == 2 ||
+                                     sscanf(cmt_tile.c_str(), "CMT_TOP_L_LOWER_B_X%dY%d", &cmt_x, &cmt_y) == 2) &&
+                                    cmt_x == hclk_x && hclk_y == cmt_y + 17)
+                                    write_bit("HCLK_CMT_MUX_CLK_0.HCLK_CMT_MUX_CLK_MMCM0");
+                            } else if (ci2->type == id_PLLE2_ADV_PLLE2_ADV) {
+                                if ((sscanf(cmt_tile.c_str(), "CMT_TOP_R_UPPER_T_X%dY%d", &cmt_x, &cmt_y) == 2 ||
+                                     sscanf(cmt_tile.c_str(), "CMT_TOP_L_UPPER_T_X%dY%d", &cmt_x, &cmt_y) == 2) &&
+                                    cmt_x == hclk_x && hclk_y == cmt_y - 18)
+                                    write_bit("HCLK_CMT_MUX_CLK_0.HCLK_CMT_MUX_CLK_PLL0");
+                            }
+                        }
                     }
                 }
             }
@@ -1334,14 +1449,48 @@ struct FasmBackend
         push(get_tile_name(tile));
         push("RAMB18_Y" + std::to_string(half));
         if (ci != nullptr) {
-            bool is_36 = ci->type == id_RAMB36E1_RAMB36E1;
+
+            bool is_36 = (ci->type == id_RAMB36E1_RAMB36E1 || ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1);
+            // Nathan: Implement fifo support
+            //bool is_fifo = ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1;
+
+            // Nathan: is_fifo covers both FIFO36E1 (packed to RAMBFIFO36E1_RAMBFIFO36E1)
+            // and FIFO18E1 (packed to FIFO18E1_FIFO18E1). Controls FIFO_MODE emission
+            // and EN_SYN/FIRST_WORD_FALL_THROUGH at tile level.
+            bool is_fifo = (ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1 || ci->type == id_FIFO18E1_FIFO18E1);
             write_bit("IN_USE");
+
+            // Nathan: Implement fifo support
+            if (is_fifo)
+                write_bit("FIFO_MODE");
+
+            // Nathan: ZINV_REGCLKARDRCLK only emitted when DO_REG=1.
+            // Confirmed from Vivado ground truth: absent for DO_REG=0, present for DO_REG=1
+            // in both FIFO18E1 (6 cases) and FIFO36E1 (8 cases). The register clock path
+            // is only active when the output register is enabled.
+            if (is_fifo && bool_or_default(ci->params, id_DOA_REG, false)) {
+                write_bit("ZINV_REGCLKARDRCLK", true);
+            }
+
             write_bram_width(ci, "READ_WIDTH_A", is_36, half == 1);
             write_bram_width(ci, "READ_WIDTH_B", is_36, half == 1);
-            write_bram_width(ci, "WRITE_WIDTH_A", is_36, half == 1);
+
+            // Nathan: WRITE_WIDTH_A was missing — DB has independent frame bits
+            // (27_51/52/53 for Y0, different from READ_WIDTH_A at 27_35/36/37).
+            // Confirmed never emitted: grep fasm.cc for WRITE_WIDTH_A returns nothing,
+            // out.fasm grep confirms zero emissions. Missing in loc_vs_nextpnr across
+            // hundreds of loc_was_effective=True cases.
+
+
+            write_bram_width(ci, "WRITE_WIDTH_A", is_36, half == 1);  // Nathan: missing call — WRITE_WIDTH_A exists in DB at BRAM_L.RAMB18_Y*.WRITE_WIDTH_A_* but was never called (me personally, im doubtful, theres got to be some odd reason) 
             write_bram_width(ci, "WRITE_WIDTH_B", is_36, half == 1);
             write_bit("DOA_REG", bool_or_default(ci->params, id_DOA_REG, false));
             write_bit("DOB_REG", bool_or_default(ci->params, id_DOB_REG, false));
+            
+            write_bit("RSTREG_PRIORITY_A_RSTREG", str_or_default(ci->params, ctx->id("RSTREG_PRIORITY_A"), "RSTREG") == "RSTREG");
+            write_bit("RSTREG_PRIORITY_B_RSTREG", str_or_default(ci->params, ctx->id("RSTREG_PRIORITY_B"), "RSTREG") == "RSTREG");
+            write_bit("RDADDR_COLLISION_HWCONFIG_DELAYED_WRITE", str_or_default(ci->params, ctx->id("RDADDR_COLLISION_HWCONFIG"), "DELAYED_WRITE") == "DELAYED_WRITE");
+
             for (auto &invpin : invertible_pins[ctx->id(ci->attrs[id_X_ORIG_TYPE].as_string())])
                 write_bit("ZINV_" + invpin.str(ctx),
                           !bool_or_default(ci->params, ctx->id("IS_" + invpin.str(ctx) + "_INVERTED"), false));
@@ -1357,15 +1506,101 @@ struct FasmBackend
 
             write_bram_init(half, ci, is_36);
         }
-        pop();
+
+        pop(); // pops RAMB18_Y*, stack now: [tile_name]
         if (half == 0) {
             auto used_rdaddrcasc = used_wires_starting_with(tile, "BRAM_CASCOUT_ADDRARDADDR", false);
             auto used_wraddrcasc = used_wires_starting_with(tile, "BRAM_CASCOUT_ADDRBWRADDR", false);
             write_bit("CASCOUT_ARD_ACTIVE", !used_rdaddrcasc.empty());
             write_bit("CASCOUT_BWR_ACTIVE", !used_wraddrcasc.empty());
-        }
-        pop();
-    }
+            // Nathan: ZALMOST_*_OFFSET are tile-level bits (no RAMB18_Y* prefix).
+            // DB: BRAM_L.ZALMOST_EMPTY_OFFSET[0..12] 27_288..27_312
+            //     BRAM_L.ZALMOST_FULL_OFFSET[0..12]  27_08..27_32
+            // Push stack here is [tile_name] only — same level as CASCOUT_ARD_ACTIVE
+            // which is confirmed correct by existing code. All-ones = default offset
+            // 0x1FFF (ALMOST_EMPTY_OFFSET=0x0080 inverted across 13 bits).
+            // Vivado emits these on all active BRAM tiles including non-FIFO RAMs.
+            // Written once at half==0 to avoid double-emission (RAMB36 uses both halves).
+
+            // Nathan: ZALMOST_*_OFFSET are tile-level bits but must only be emitted
+            // for tiles with an active cell. Verified: nextpnr was emitting these on
+            // ALL BRAM tiles including empty ones (e.g. BRAM_L_X30Y*) because this
+            // block has no ci != nullptr guard. Vivado does NOT emit ZALMOST on empty
+            // tiles — confirmed by fuzzer EXTRA list showing X30Y* tiles with no placed
+            // cell. Fix: guard with ci != nullptr.
+
+            // Nathan: ZALMOST must invert actual ALMOST_*_OFFSET params, not hardcode all-ones.
+            // Confirmed: default 0x0080 → 13'b1111101111111 (bit 7 clear). Verified across 5 cases.
+            if (ci != nullptr) {
+                auto empty_off = int_or_default(ci->params, ctx->id("ALMOST_EMPTY_OFFSET"), 0x0080);
+                auto full_off  = int_or_default(ci->params, ctx->id("ALMOST_FULL_OFFSET"),  0x0080);
+                std::vector<bool> zalmost_empty, zalmost_full;
+                for (int i = 0; i < 13; i++) {
+                    zalmost_empty.push_back(!((empty_off >> i) & 1));
+                    zalmost_full.push_back(!((full_off >> i) & 1));
+                }
+                write_vector("ZALMOST_EMPTY_OFFSET[12:0]", zalmost_empty);
+                write_vector("ZALMOST_FULL_OFFSET[12:0]", zalmost_full);
+            }
+
+
+            
+
+            // Nathan: RAM_EXTENSION is under BRAM_L.RAMB36.* in DB — requires its own push.
+            // DB: BRAM_L.RAMB36.RAM_EXTENSION_A_NONE_OR_UPPER !27_188
+            //     BRAM_L.RAMB36.RAM_EXTENSION_B_NONE_OR_UPPER !27_187
+            // The ! prefix means fasm2frames CLEARS the bit when this name is emitted.
+            // Default param value "NONE" → condition true → bit emitted → frame bit cleared.
+            // Only RAMB36 has this config; RAMB18 has no RAM_EXTENSION parameter.
+            // half==0 guard prevents double-emission since RAMB36 spans both halves.
+            
+            bool cell_is_36 = (ci != nullptr && (ci->type == id_RAMB36E1_RAMB36E1 || 
+                                      ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1 ||
+                                      ci->type == id_FIFO18E1_FIFO18E1));
+    
+            if (cell_is_36) {
+                push("RAMB36");
+                write_bit("RAM_EXTENSION_A_NONE_OR_UPPER",
+                        str_or_default(ci->params, ctx->id("RAM_EXTENSION_A"), "NONE") == "NONE");
+                write_bit("RAM_EXTENSION_B_NONE_OR_UPPER",
+                        str_or_default(ci->params, ctx->id("RAM_EXTENSION_B"), "NONE") == "NONE");
+
+                // Nathan: BRAM36_READ/WRITE_WIDTH_A_1 set when DATA_WIDTH=9 (READ_WIDTH_A=9,
+                // which halves to actual_width=4 inside write_bram_width with is_36=true).
+                // Confirmed missing from fuzzer: SUSPECT case with DATA_WIDTH=9 shows these missing.
+                // Confirmed present in Vivado ground truth: top_0004/0006 (DATA_WIDTH=9).
+                // DB: BRAM_L.RAMB36.BRAM36_READ_WIDTH_A_1 27_184
+                //     BRAM_L.RAMB36.BRAM36_WRITE_WIDTH_A_1 27_180
+
+
+                int rwa = int_or_default(ci->params, ctx->id("READ_WIDTH_A"), 0);
+                int wwa = int_or_default(ci->params, ctx->id("WRITE_WIDTH_A"), 0);
+                write_bit("BRAM36_READ_WIDTH_A_1", rwa == 9);
+                write_bit("BRAM36_WRITE_WIDTH_A_1", wwa == 9);
+
+
+                pop();
+            }
+
+            // Nathan: EN_SYN and FIRST_WORD_FALL_THROUGH are tile-level bits for FIFO36E1.
+            // EN_SYN confirmed set in all 5 Vivado ground truth cases (EN_SYN=TRUE).
+            // FIRST_WORD_FALL_THROUGH confirmed from DB: BRAM_L.FIRST_WORD_FALL_THROUGH 27_170.
+
+            // Nathan: EN_SYN and FIRST_WORD_FALL_THROUGH are tile-level bits for both
+            // FIFO36E1 and FIFO18E1. Confirmed present in all 6 FIFO18E1 ground truth
+            // cases (EN_SYN=TRUE) and all 8 FIFO36E1 cases.
+            if (ci != nullptr && (ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1 || ci->type == id_FIFO18E1_FIFO18E1)) {
+
+                write_bit("EN_SYN", str_or_default(ci->params, ctx->id("EN_SYN"), "FALSE") == "TRUE");
+                write_bit("FIRST_WORD_FALL_THROUGH", str_or_default(ci->params, ctx->id("FIRST_WORD_FALL_THROUGH"), "FALSE") == "TRUE");
+            }
+
+        } // End of if (half == 0)
+        pop(); // pops tile_name
+        
+    } // End of write_bram_half
+
+
 
     void write_bram()
     {
@@ -1377,9 +1612,22 @@ struct FasmBackend
                 CellInfo *l = nullptr, *u = nullptr;
                 auto bts = ctx->tileStatus[tile].bts;
                 if (bts != nullptr) {
+
                     if (bts->cells[BEL_RAM36] != nullptr) {
                         l = bts->cells[BEL_RAM36];
                         u = bts->cells[BEL_RAM36];
+                    } else if (bts->cells[BEL_RAMFIFO36] != nullptr) {
+                        // Nathan: FIFO36E1 packed to RAMBFIFO36E1_RAMBFIFO36E1 sits in BEL_RAMFIFO36
+                        l = bts->cells[BEL_RAMFIFO36];
+                        u = bts->cells[BEL_RAMFIFO36];
+                    } else if (bts->cells[BEL_FIFO36] != nullptr) {
+                        l = bts->cells[BEL_FIFO36];
+                        u = bts->cells[BEL_FIFO36];
+                    } else if (bts->cells[BEL_FIFO18_L] != nullptr) {
+                        // Nathan: FIFO18E1 sits in BEL_FIFO18_L (lower 18K half only).
+                        // Upper half (u) is nullptr — write_bram_half handles ci=nullptr correctly.
+                        l = bts->cells[BEL_FIFO18_L];
+                        u = nullptr;
                     } else {
                         l = bts->cells[BEL_RAM18_L];
                         u = bts->cells[BEL_RAM18_U];
@@ -1404,7 +1652,7 @@ struct FasmBackend
             return prop.as_int64();
     }
 
-    void write_pll_clkout(const std::string &name, CellInfo *ci)
+    void write_pll_clkout(const std::string &name, CellInfo *ci, bool is_mmcm = false)
     {
         // FIXME: variable duty cycle
         int high = 1, low = 1, phasemux = 0, delaytime = 0, frac = 0;
@@ -1447,6 +1695,16 @@ struct FasmBackend
                 write_bit(name + "_CLKOUT2_FRAC_EN[0]", edge);
                 write_int_vector(name + "_CLKOUT2_FRAC[2:0]", frac, 3);
             }
+        } else if (name != "DIVCLK") {
+            write_int_vector(name + "_CLKOUT1_HIGH_TIME[5:0]", 1, 6);
+            write_int_vector(name + "_CLKOUT1_LOW_TIME[5:0]", 1, 6);
+            // Nathan: FRACTIONAL_NO_COUNT only in MMCM DB (segbits_cmt_top_r_lower_b.db).
+            // PLL DB (segbits_cmt_top_r_upper_t.db) has no FRACTIONAL fields for any CLKOUT.
+            // CLKOUT6 is MMCM-only. Verified absent from segbits_cmt_top_r_upper_t.db.
+            if (is_mmcm && (name == "CLKOUT5" || name == "CLKOUT6"))
+                write_bit(name + "_CLKOUT2_FRACTIONAL_NO_COUNT[0]", true);
+            else
+                write_bit(name + "_CLKOUT2_NO_COUNT[0]", true);
         }
     }
 
@@ -1471,18 +1729,61 @@ struct FasmBackend
         std::string comp = str_or_default(ci->params, id_COMPENSATION, "INTERNAL");
         push("COMPENSATION");
         if (comp == "INTERNAL") {
-            // write_bit("INTERNAL");
             write_bit("Z_ZHOLD_OR_CLKIN_BUF");
         } else {
             NPNR_ASSERT_FALSE("unsupported compensation type");
         }
         pop();
 
-        // FIXME: should these be calculated somehow?
+        // Compute VCO frequency
+        double mult_f = float_or_default(ci, "CLKFBOUT_MULT_F", float_or_default(ci, "CLKFBOUT_MULT", 8));
+        double period = float_or_default(ci, "CLKIN1_PERIOD", 10.0);
+        int divclk = int_or_default(ci->params, ctx->id("DIVCLK_DIVIDE"), 1);
+        double vco = mult_f * 1000.0 / (period * divclk);
+
+        // PLLE2_ADV VCO-dependent values (800-1600MHz range)
+        uint64_t lktable;
+        uint32_t table;
+        if (vco < 900) {
+            lktable = 0xB5BE8FA401ULL; table = 0x3B4;  // 800MHz
+        } else if (vco < 1100) {
+            lktable = 0xE73E8FA401ULL; table = 0x3DC;  // 1000MHz
+        } else if (vco < 1400) {
+            lktable = 0xFFF39FA401ULL; table = 0x3F4;  // 1200MHz
+        } else {
+            lktable = 0xFFE71FA401ULL; table = 0x3D4;  // 1600MHz
+        }
         write_int_vector("FILTREG1_RESERVED[11:0]", 0x8, 12);
-        write_int_vector("LKTABLE[39:0]", 0xB5BE8FA401ULL, 40);
+        write_int_vector("LKTABLE[39:0]", lktable, 40);
         write_bit("LOCKREG3_RESERVED[0]");
-        write_int_vector("TABLE[9:0]", 0x3B4, 10);
+        write_int_vector("TABLE[9:0]", table, 10);
+        pop(2);
+    }
+
+
+    void write_xadc(CellInfo *ci)
+    {
+        // Nathan: XADC INIT param emission.
+        // Bit positions confirmed via prjxray 033-mon-xadc fuzzer — 119 specimens,
+        // avg candidates 1.000. All 512 bits unambiguously resolved.
+        // segbits_monitor_bot.db: MONITOR_BOT.XADC.INIT_XX[N] — no IN_USE bit.
+        // Tile: MONITOR_BOT_X46Y79 (single fixed instance, confirmed Vivado).
+        // Yosys stores INIT params as MSB-first binary bit strings (Property::str).
+        // Must read .str directly — int_or_default would misparse binary strings.
+        push(get_tile_name(ci->bel.tile));
+        push("XADC");
+        for (int i = 0x40; i < 0x60; i++) {
+            std::string param = stringf("INIT_%02X", i);
+            std::string fasm  = stringf("INIT_%02X[15:0]", i);
+            auto it = ci->params.find(ctx->id(param));
+            std::vector<bool> bits(16, false);
+            if (it != ci->params.end()) {
+                const auto &str = it->second.str;
+                for (int j = 0; j < 16 && j < int(str.size()); j++)
+                    bits[j] = (str[j] == Property::S1);
+            }
+            write_vector(fasm, bits);
+        }
         pop(2);
     }
 
@@ -1494,35 +1795,84 @@ struct FasmBackend
         write_bit("ZINV_PWRDWN", bool_or_default(ci->params, id_IS_PWRDWN_INVERTED, false));
         write_bit("ZINV_RST", bool_or_default(ci->params, id_IS_RST_INVERTED, false));
         write_bit("INV_CLKINSEL", bool_or_default(ci->params, id_IS_CLKINSEL_INVERTED, false));
-        write_bit("ZINV_PSEN", bool_or_default(ci->params, id_IS_PSEN_INVERTED, false));
-        write_bit("ZINV_PSINCDEC", bool_or_default(ci->params, id_IS_PSINCDEC_INVERTED, false));
-        write_pll_clkout("DIVCLK", ci);
-        write_pll_clkout("CLKFBOUT", ci);
-        write_pll_clkout("CLKOUT0", ci);
-        write_pll_clkout("CLKOUT1", ci);
-        write_pll_clkout("CLKOUT2", ci);
-        write_pll_clkout("CLKOUT3", ci);
-        write_pll_clkout("CLKOUT4", ci);
-        write_pll_clkout("CLKOUT5", ci);
-        write_pll_clkout("CLKOUT6", ci);
+        // Nathan: ZINV_PSEN/ZINV_PSINCDEC always 1 for MMCME2_ADV — no IS_PSEN/PSINCDEC_INVERTED
+        // param exists for this primitive (only MMCME4_ADV has it). Verified against
+        // segbits_cmt_top_r_lower_b.db: MMCME2_ADV.ZINV_PSEN 28_110, ZINV_PSINCDEC 29_110
+        write_bit("ZINV_PSEN");
+        write_bit("ZINV_PSINCDEC");
+        // Nathan: POWER_REG[8] reserved power register bit always set by Vivado for MMCME2_ADV.
+        // Verified: segbits_cmt_top_r_lower_b.db MMCME2_ADV.POWER_REG_POWER_REG_POWER_REG[8] 29_699
+        write_bit("POWER_REG_POWER_REG_POWER_REG[8]");
+        write_pll_clkout("DIVCLK", ci, true);
+        write_pll_clkout("CLKFBOUT", ci, true);
+        write_pll_clkout("CLKOUT0", ci, true);
+        write_pll_clkout("CLKOUT1", ci, true);
+        write_pll_clkout("CLKOUT2", ci, true);
+        write_pll_clkout("CLKOUT3", ci, true);
+        write_pll_clkout("CLKOUT4", ci, true);
+        write_pll_clkout("CLKOUT5", ci, true);
+        write_pll_clkout("CLKOUT6", ci, true);  // MMCM has CLKOUT6
+
         std::string comp = str_or_default(ci->params, id_COMPENSATION, "INTERNAL");
-        push("COMP");
+        
+
+
+        // Nathan commented
+        // Spartan-7 prjxray DB uses COMP.Z_ZHOLD (not COMPENSATION.Z_ZHOLD_OR_CLKIN_BUF
+        // which is the correct key for PLLE2_ADV). Verified against
+        // segbits_cmt_top_r_lower_b.db: CMT_TOP_R_LOWER_B.MMCME2_ADV.COMP.Z_ZHOLD 28_979 28_1020
+        
+        // Nathan removed push("COMPENSATION");
+        push("COMP"); // Nathan added
         if (comp == "INTERNAL") {
-            write_bit("Z_ZHOLD");
+            // Nathan removed write_bit("Z_ZHOLD_OR_CLKIN_BUF");
+             write_bit("Z_ZHOLD"); // Nathan added
         } else {
-            NPNR_ASSERT_FALSE("unsupported MMCM compensation type");
+            NPNR_ASSERT_FALSE("unsupported compensation type");
         }
         pop();
+
+        // MMCME2_ADV VCO-dependent lock/filter registers
+        double mult_f = float_or_default(ci, "CLKFBOUT_MULT_F", 8.0);
+        double period = float_or_default(ci, "CLKIN1_PERIOD", 10.0);
+        int divclk = int_or_default(ci->params, ctx->id("DIVCLK_DIVIDE"), 1);
+        double vco = mult_f * 1000.0 / (period * divclk);
+
+        uint64_t lktable;
+        uint32_t table;
+        if (vco < 675) {
+            lktable = 0x8C7E8FA401ULL; table = 0x3AC;
+        } else if (vco < 900) {
+            lktable = 0xB5BE8FA401ULL; table = 0x3CC;
+        } else if (vco < 1100) {
+            lktable = 0xE73E8FA401ULL; table = 0x3D4;
+        } else {
+            lktable = 0xFFF39FA401ULL; table = 0x344;
+        }
         write_int_vector("FILTREG1_RESERVED[11:0]", 0x8, 12);
-        write_int_vector("LKTABLE[39:0]", 0xB5BE8FA401ULL, 40);
+        write_int_vector("LKTABLE[39:0]", lktable, 40);
         write_bit("LOCKREG3_RESERVED[0]");
-        write_int_vector("TABLE[9:0]", 0x3CC, 10);
-        write_bit("POWER_REG_POWER_REG_POWER_REG[8]");
+        write_int_vector("TABLE[9:0]", table, 10);
         pop(2);
     }
 
     void write_dsp_cell(CellInfo *ci)
     {
+
+        // Nathan engineered this fix due to string conversion bug
+        auto prop_to_bin_str = [&](const std::string &name, const std::string &def, int width) -> std::string {
+            auto it = ci->params.find(ctx->id(name));
+            if (it == ci->params.end()) return def;
+            if (it->second.is_string) return it->second.as_string();
+            // Integer Property — convert to binary string
+            std::string s(width, '0');
+            uint64_t v = (uint64_t)it->second.as_int64();
+            for (int i = 0; i < width; i++)
+                s[width - 1 - i] = ((v >> i) & 1) ? '1' : '0';
+            return s;
+        };
+
+
         auto tile_name = get_tile_name(ci->bel.tile);
         auto tile_side = tile_name.at(4);
         push(tile_name);
@@ -1566,7 +1916,10 @@ struct FasmBackend
         if (use_simd == "FOUR12") write_bit("USE_SIMD_FOUR12");
 
         // PATTERN
-        auto pattern_str = str_or_default(ci->params, ctx->id("PATTERN"), "");
+        // Nathan edited out due to bug in string converstion
+//        auto pattern_str = str_or_default(ci->params, ctx->id("PATTERN"), "");
+
+        auto pattern_str = prop_to_bin_str("PATTERN", "", 48);
         if (!boost::empty(pattern_str)) {
             const size_t pattern_size = 48;
             std::vector<bool> pattern_vector(pattern_size, true);
@@ -1582,7 +1935,10 @@ struct FasmBackend
         if (autoreset_patdet == "RESET_NOT_MATCH") write_bit("AUTORESET_PATDET_RESET_NOT_MATCH");
 
         // MASK
-        auto mask_str = str_or_default(ci->params, ctx->id("MASK"), "001111111111111111111111111111111111111111111111");
+        // nathan edited out due to bug
+        //auto mask_str = str_or_default(ci->params, ctx->id("MASK"), "001111111111111111111111111111111111111111111111");
+        
+        auto mask_str = prop_to_bin_str("MASK", "001111111111111111111111111111111111111111111111", 48);
         // Yosys gives us 48 bit, but prjxray only recognizes 46 bits
         // The most significant two bits seem to be zero, so let us just truncate them
         const size_t mask_size = 46;
