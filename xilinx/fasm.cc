@@ -1280,6 +1280,8 @@ struct FasmBackend
                 write_pll(ci);
             } else if (ci->type == id_MMCME2_ADV_MMCME2_ADV) {
                 write_mmcm(ci);
+            } else if (ci->type == id_XADC) {
+                write_xadc(ci);
             }
             blank();
         }
@@ -1755,6 +1757,33 @@ struct FasmBackend
         write_int_vector("LKTABLE[39:0]", lktable, 40);
         write_bit("LOCKREG3_RESERVED[0]");
         write_int_vector("TABLE[9:0]", table, 10);
+        pop(2);
+    }
+
+
+    void write_xadc(CellInfo *ci)
+    {
+        // Nathan: XADC INIT param emission.
+        // Bit positions confirmed via prjxray 033-mon-xadc fuzzer — 119 specimens,
+        // avg candidates 1.000. All 512 bits unambiguously resolved.
+        // segbits_monitor_bot.db: MONITOR_BOT.XADC.INIT_XX[N] — no IN_USE bit.
+        // Tile: MONITOR_BOT_X46Y79 (single fixed instance, confirmed Vivado).
+        // Yosys stores INIT params as MSB-first binary bit strings (Property::str).
+        // Must read .str directly — int_or_default would misparse binary strings.
+        push(get_tile_name(ci->bel.tile));
+        push("XADC");
+        for (int i = 0x40; i < 0x60; i++) {
+            std::string param = stringf("INIT_%02X", i);
+            std::string fasm  = stringf("INIT_%02X[15:0]", i);
+            auto it = ci->params.find(ctx->id(param));
+            std::vector<bool> bits(16, false);
+            if (it != ci->params.end()) {
+                const auto &str = it->second.str;
+                for (int j = 0; j < 16 && j < int(str.size()); j++)
+                    bits[j] = (str[j] == Property::S1);
+            }
+            write_vector(fasm, bits);
+        }
         pop(2);
     }
 

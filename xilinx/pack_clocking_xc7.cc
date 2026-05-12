@@ -58,7 +58,38 @@ void XC7Packer::prepare_clocking()
             tie_port(ci, "S0", true, true);
             tie_port(ci, "S1", false, true);
             tie_port(ci, "IGNORE0", true, true);
+        } 
+        // Nathan: Yosys outputs BUFR as type string "BUFR" (not in constids).
+        // Map to id_BUFR_BUFR for chipdb BEL matching.
+        // BUFR has no config bits — purely a routing resource.
+        // fasm.cc already handles IN_USE and BUFR_DIVIDE.BYPASS via pp_config routing.
+        else if (ci->type == ctx->id("BUFR")) {
+            ci->type = id_BUFR_BUFR;
+        } 
+        
+        // Nathan: Yosys outputs BUFIO as type string "BUFIO" (not in constids).
+        // Map to id_BUFIO_BUFIO for chipdb BEL matching.
+        // BUFIO is a purely routing resource — no config bits in prjxray DB.
+        // Used for source-synchronous interfaces requiring regional clock routing.
+        else if (ci->type == ctx->id("BUFIO")) {
+            ci->type = id_BUFIO_BUFIO;
+        } else if (ci->type == ctx->id("XADC")) {
+               
+            // Nathan: XADC placement fix.
+            // Yosys outputs type string "XADC" — must convert to id_XADC (constid)
+            // before calling preplace_unique, which matches cell->type against chipdb BEL types.
+            // XADC is a single unique hard macro per device — preplace_unique finds
+            // the only XADC BEL (XADC_X0Y0/XADC) and assigns it.
+            // Confirmed from Vivado: LOC=XADC_X0Y0, BEL=XADC.XADC, tile=MONITOR_BOT_X46Y79.
+            // pins.cc invertible pins (CONVSTCLK, DCLK) already defined for id_XADC.
+            // INIT param FASM emission pending segbits_xadc.db generation via 033-mon-xadc fuzzer.
+            // fasm.cc routing pips (CONVSTCLKINV, DCLKINV) handled via site_pips automatically.
+            ci->type = id_XADC;
+            preplace_unique(ci);
         }
+
+
+
         if (ci->attrs.count(id_BEL))
             used_bels.insert(ctx->getBelByNameStr(ci->attrs.at(id_BEL).as_string()));
     }
@@ -126,6 +157,19 @@ void XC7Packer::pack_gbs()
         if (ci->type == id_BUFGCTRL)
             try_preplace(ci, id_I0);
         if (ci->type == id_BUFG_BUFG)
+            try_preplace(ci, id_I);
+
+        // Nathan: Preplace BUFR near its clock source via dedicated routing.
+        // try_preplace traverses I port driver → finds nearest BUFR BEL via short route.
+        // Confirmed: Vivado places BUFR at BUFR_X0Y1 adjacent to HCLK_IOI3 tile.
+        if (ci->type == id_BUFR_BUFR)
+            try_preplace(ci, id_I);
+
+        // Nathan: Preplace BUFIO near its clock source via dedicated routing.
+        // try_preplace traverses I port driver → finds nearest BUFIO BEL.
+        // Confirmed BEL format: BUFIO_X0Y9/BUFIO from Vivado ground truth.
+
+        if (ci->type == id_BUFIO_BUFIO)
             try_preplace(ci, id_I);
     }
 }
