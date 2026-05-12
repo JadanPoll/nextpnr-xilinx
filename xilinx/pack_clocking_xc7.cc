@@ -85,6 +85,18 @@ void XC7Packer::prepare_clocking()
             // INIT param FASM emission pending segbits_xadc.db generation via 033-mon-xadc fuzzer.
             // fasm.cc routing pips (CONVSTCLKINV, DCLKINV) handled via site_pips automatically.
             ci->type = id_XADC;
+                        
+            // Nathan: VP and VN are dedicated analog inputs with no fabric routing path.
+            // Disconnect them so the router doesn't try to route GND/constants to them.
+            // Confirmed: nextpnr fails with "Failed to route arc PSEUDO_GND_NET to SITEWIRE/XADC_X0Y0/VP"
+            // when VP/VN are connected to constants. Vivado handles VP/VN outside the routing fabric.
+            for (auto port : {ctx->id("VP"), ctx->id("VN")}) {
+                NetInfo *net = ci->getPort(port);
+                if (net != nullptr)
+                    ci->disconnectPort(port);
+            }
+            
+            
             preplace_unique(ci);
         }
 

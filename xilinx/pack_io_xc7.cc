@@ -741,54 +741,147 @@ void XC7Packer::pack_iologic()
             xform_cell(oddr_rules, ci);
 
             ci->attrs[id_BEL] = ol_site + (is_tristate ? "/TFF" : "/OUTFF");
-        }
-        
-        else if (ci->type == id_OSERDESE2) {
+        } else if (ci->type == id_OSERDESE2) {
             bool is_slave = str_or_default(ci->params, id_SERDES_MODE, "MASTER") == "SLAVE";
             if (is_slave) {
-                // Nathan: SLAVE OSERDESE2 cascade placement.
-                // Vivado ground truth: SLAVE=OLOGIC_X0Y87, MASTER=OLOGIC_X0Y88, same tile.
-                // Slave OQ is unconnected — Vivado accepts this for cascade.
-                // Find MASTER via SHIFTOUT1 net (ctx->id used — not in constids.inc).
-                // SLAVE site = MASTER site with Y decremented by 1.
+                // Find MASTER via SHIFTOUT1 net
                 NetInfo *shiftout = ci->getPort(ctx->id("SHIFTOUT1"));
                 if (shiftout == nullptr || shiftout->users.empty())
                     log_error("OSERDESE2 SLAVE '%s' has disconnected SHIFTOUT1\n", ctx->nameOf(ci));
+                
                 CellInfo *master = nullptr;
                 for (auto &usr : shiftout->users)
                     if (usr.cell != ci) { master = usr.cell; break; }
                 if (master == nullptr)
                     log_error("OSERDESE2 SLAVE '%s' cannot find MASTER\n", ctx->nameOf(ci));
+
                 NetInfo *master_oq = master->getPort(id_OQ);
                 if (master_oq == nullptr || master_oq->users.empty())
                     log_error("OSERDESE2 MASTER for SLAVE '%s' has disconnected OQ\n", ctx->nameOf(ci));
+
                 CellInfo *ob = find_p_outbuf(master_oq);
                 if (ob == nullptr)
                     log_error("OSERDESE2 MASTER for SLAVE '%s' has illegal OQ fanout\n", ctx->nameOf(ci));
+
+                // SAFETY: Ensure the OBUF actually has a placement constraint
+                if (ob->attrs.count(id_BEL) == 0)
+                    log_error("OBUF '%s' for OSERDESE2 MASTER is missing a LOC constraint\n", ctx->nameOf(ob));
+
                 std::string master_site = get_ologic_site(ob->attrs.at(id_BEL).as_string());
                 size_t y_pos = master_site.rfind('Y');
-                std::string slave_site = master_site.substr(0, y_pos + 1) +
-                                         std::to_string(std::stoi(master_site.substr(y_pos + 1)) - 1);
+                int master_y = std::stoi(master_site.substr(y_pos + 1));
+                
+                // SAFETY: Prevent NextPNR from crashing if Master is at the bottom of a column
+                if (master_y == 0)
+                    log_error("OSERDESE2 MASTER at '%s' is at Y0; cannot place SLAVE at Y-1\n", master_site.c_str());
+
+                std::string slave_site = master_site.substr(0, y_pos + 1) + std::to_string(master_y - 1);
                 ci->attrs[id_BEL] = slave_site + "/OSERDESE2";
-            } else {
+            } 
+            
+            
+            
+            else {
                 NetInfo *q = ci->getPort(id_OQ);
                 NetInfo *ofb = ci->getPort(id_OFB);
                 bool q_disconnected = q == nullptr || q->users.empty();
                 bool ofb_disconnected = ofb == nullptr || ofb->users.empty();
                 if (q_disconnected && ofb_disconnected)
                     log_error("%s '%s' has disconnected OQ/OFB output ports\n", ci->type.c_str(ctx), ctx->nameOf(ci));
+                
                 BelId io_bel;
                 CellInfo *ob = !q_disconnected ? find_p_outbuf(q) : find_p_outbuf(ofb);
-                if (ob != nullptr)
+                if (ob != nullptr && ob->attrs.count(id_BEL)) {
                     io_bel = ctx->getBelByNameStr(ob->attrs.at(id_BEL).as_string());
-                else
-                    log_error("%s '%s' has illegal fanout on OQ or OFB output\n", ci->type.c_str(ctx), ctx->nameOf(ci));
+                } else {
+                    log_error("%s '%s' has illegal fanout or unconstrained output\n", ci->type.c_str(ctx), ctx->nameOf(ci));
+                }
                 std::string ol_site = get_ologic_site(ctx->getBelName(io_bel).str(ctx));
                 ci->attrs[id_BEL] = ol_site + "/OSERDESE2";
             }
         }
+
         
-        
+        else if (ci->type == id_ISERDESE2) {
+            bool is_slave = str_or_default(ci->params, id_SERDES_MODE, "MASTER") == "SLAVE";
+            if (is_slave) {
+                // Nathan: ISERDESE2 SLAVE cascade. Data flows MASTER->SLAVE via SHIFTOUT1->SHIFTIN1.
+                // SLAVE site = MASTER site Y-1. Confirmed: ILOGIC_X0Y87(SLAVE)+ILOGIC_X0Y88(MASTER) share tile.
+                NetInfo *shiftin = ci->getPort(ctx->id("SHIFTIN1"));
+                if (shiftin == nullptr || shiftin->driver.cell == nullptr)
+                    log_error("ISERDESE2 SLAVE '%s' has disconnected SHIFTIN1\n", ctx->nameOf(ci));
+                
+                CellInfo *master = shiftin->driver.cell;
+                std::string iobdelay = str_or_default(master->params, id_IOBDELAY, "NONE");
+                BelId master_io_bel;
+                
+                // We use the MASTER's input to find the physical tile
+                if (iobdelay == "IFD") {
+                    NetInfo *d = master->getPort(id_DDLY);
+                    if (d == nullptr || d->driver.cell == nullptr)
+                        log_error("MASTER ISERDESE2 '%s' has disconnected DDLY\n", ctx->nameOf(master));
+                    master_io_bel = iodelay_to_io.at(d->driver.cell->name);
+                } else {
+                    NetInfo *d = master->getPort(id_D);
+                    if (d == nullptr || d->driver.cell == nullptr)
+                        log_error("MASTER ISERDESE2 '%s' has disconnected D\n", ctx->nameOf(master));
+                    
+                    // SAFETY: Prevent crashing if fuzzer generates an unconstrained Master INBUF
+                    if (d->driver.cell->attrs.count(id_BEL) == 0)
+                        log_error("INBUF for MASTER ISERDESE2 '%s' is missing a LOC constraint\n", ctx->nameOf(master));
+                        
+                    master_io_bel = ctx->getBelByNameStr(d->driver.cell->attrs.at(id_BEL).as_string());
+                }
+                
+                std::string master_site = get_ilogic_site(ctx->getBelName(master_io_bel).str(ctx));
+                size_t y_pos = master_site.rfind('Y');
+                int master_y = std::stoi(master_site.substr(y_pos + 1));
+                
+                // SAFETY: Prevent NextPNR from crashing if Master is at the bottom of a column
+                if (master_y == 0)
+                    log_error("ISERDESE2 MASTER at '%s' is at Y0; cannot place SLAVE at Y-1\n", master_site.c_str());
+                    
+                std::string slave_site = master_site.substr(0, y_pos + 1) + std::to_string(master_y - 1);
+                ci->attrs[id_BEL] = slave_site + "/ISERDESE2";
+                
+            } else {
+                // MASTER or STANDALONE logic (Original NextPNR code goes here)
+                fold_inverter(ci, "CLKB");
+                fold_inverter(ci, "OCLKB");
+                std::string iobdelay = str_or_default(ci->params, id_IOBDELAY, "NONE");
+                BelId io_bel;
+                if (iobdelay == "IFD") {
+                    NetInfo *d = ci->getPort(id_DDLY);
+                    if (d == nullptr || d->driver.cell == nullptr)
+                        log_error("%s '%s' has disconnected DDLY input\n", ci->type.c_str(ctx), ctx->nameOf(ci));
+                    CellInfo *drv = d->driver.cell;
+                    if (boost::contains(drv->type.str(ctx), "IDELAYE2") && d->driver.port == id_DATAOUT)
+                        io_bel = iodelay_to_io.at(drv->name);
+                    else
+                        log_error("%s '%s' has DDLY input connected to illegal cell type %s\n", ci->type.c_str(ctx),
+                                  ctx->nameOf(ci), drv->type.c_str(ctx));
+                } else if (iobdelay == "NONE") {
+                    NetInfo *d = ci->getPort(id_D);
+                    if (d == nullptr || d->driver.cell == nullptr)
+                        log_error("%s '%s' has disconnected D input\n", ci->type.c_str(ctx), ctx->nameOf(ci));
+                    CellInfo *drv = d->driver.cell;
+                    if (boost::contains(drv->type.str(ctx), "INBUF_EN") ||
+                        boost::contains(drv->type.str(ctx), "INBUF_DCIEN"))
+                        io_bel = ctx->getBelByNameStr(drv->attrs.at(id_BEL).as_string());
+                    else
+                        log_error("%s '%s' has D input connected to illegal cell type %s\n", ci->type.c_str(ctx),
+                                  ctx->nameOf(ci), drv->type.c_str(ctx));
+                } else {
+                    log_error("%s '%s' has unsupported IOBDELAY value '%s'\n", ci->type.c_str(ctx), ctx->nameOf(ci),
+                              iobdelay.c_str());
+                }
+                std::string iol_site = get_ilogic_site(ctx->getBelName(io_bel).str(ctx));
+                ci->attrs[id_BEL] = iol_site + "/ISERDESE2";
+            }
+        }
+
+
+
         else if (ci->type == id_IDDR) {
             fold_inverter(ci, "C");
 
