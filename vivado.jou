@@ -1,0 +1,238 @@
+#-----------------------------------------------------------
+# Vivado v2025.1 (64-bit)
+# SW Build 6140274 on Wed May 21 22:58:25 MDT 2025
+# IP Build 6138677 on Thu May 22 03:10:11 MDT 2025
+# SharedData Build 6139179 on Tue May 20 17:58:58 MDT 2025
+# Start of session at: Mon May 11 22:15:04 2026
+# Process ID         : 262819
+# Current directory  : /home/nathan37/nextpnr-xilinx
+# Command line       : vivado -mode tcl
+# Log file           : /home/nathan37/nextpnr-xilinx/vivado.log
+# Journal file       : /home/nathan37/nextpnr-xilinx/vivado.jou
+# Running On         : fastx3-23.ews.illinois.edu
+# Platform           : RedHatEnterprise
+# Operating System   : Red Hat Enterprise Linux 9.7 (Plow)
+# Processor Detail   : Intel(R) Xeon(R) Silver 4216 CPU @ 2.10GHz
+# CPU Frequency      : 2095.078 MHz
+# CPU Physical cores : 10
+# CPU Logical cores  : 10
+# Host memory        : 24893 MB
+# Swap memory        : 4294 MB
+# Total Virtual      : 29188 MB
+# Available Virtual  : 22395 MB
+#-----------------------------------------------------------
+reset
+# 1. Link the design to your specific Spartan-7 part
+link_design -part xc7s50csga324-1
+# 2. Now the tile object will be findable
+set tile [get_tiles MONITOR_BOT_X46Y79]
+# 3. List all PIPs (Programmable Interconnect Points) in that tile
+foreach pip [get_pips -of_objects $tile] {
+    puts "$pip"
+}
+set site [get_sites XADC_X0Y0]
+set tile_name "MONITOR_BOT_X46Y79"
+foreach pin [get_site_pins -of_objects $site] {
+    # 1. Get the physical node connected to the site pin
+    set node [get_nodes -of_objects $pin]
+    
+    # 2. Find the wire segment of that node that lives specifically in your tile
+    set wire [get_wires -of_objects $node -filter "TILE_NAME == $tile_name"]
+    
+    # 3. Get the pin direction
+    set dir [get_property DIRECTION $pin]
+    
+    puts "$pin ($dir) -> Tile Wire: $wire"
+}
+reset
+cd ~/nextpnr-xilinx
+python3 << 'PYEOF'
+import json, re
+# Complete site pin data from Vivado TCL ground truth
+# Format: pin_name -> (direction, tile_wire)
+# tile_wire strips MONITOR_BOT_X46Y79/ prefix
+vivado_pins = {}
+raw = """CONVST IN MONITOR_CONVST
+CONVSTCLK IN MONITOR_CONVSTCLK
+DADDR0 IN MONITOR_DADDR0
+DADDR1 IN MONITOR_DADDR1
+DADDR2 IN MONITOR_DADDR2
+DADDR3 IN MONITOR_DADDR3
+DADDR4 IN MONITOR_DADDR4
+DADDR5 IN MONITOR_DADDR5
+DADDR6 IN MONITOR_DADDR6
+DCLK IN MONITOR_DCLK
+DEN IN MONITOR_DEN
+DI0 IN MONITOR_DI0
+DI1 IN MONITOR_DI1
+DI2 IN MONITOR_DI2
+DI3 IN MONITOR_DI3
+DI4 IN MONITOR_DI4
+DI5 IN MONITOR_DI5
+DI6 IN MONITOR_DI6
+DI7 IN MONITOR_DI7
+DI8 IN MONITOR_DI8
+DI9 IN MONITOR_DI9
+DI10 IN MONITOR_DI10
+DI11 IN MONITOR_DI11
+DI12 IN MONITOR_DI12
+DI13 IN MONITOR_DI13
+DI14 IN MONITOR_DI14
+DI15 IN MONITOR_DI15
+DWE IN MONITOR_DWE
+RESET IN MONITOR_RESET
+VAUXN0 IN MONITOR_VAUXN0
+VAUXN1 IN MONITOR_VAUXN1
+VAUXN2 IN MONITOR_VAUXN2
+VAUXN3 IN MONITOR_VAUXN3
+VAUXN4 IN MONITOR_VAUXN4
+VAUXN5 IN MONITOR_VAUXN5
+VAUXN6 IN MONITOR_VAUXN6
+VAUXN7 IN MONITOR_VAUXN7
+VAUXN8 IN MONITOR_VAUXN8
+VAUXN9 IN MONITOR_VAUXN9
+VAUXN10 IN MONITOR_VAUXN10
+VAUXN11 IN MONITOR_VAUXN11
+VAUXN12 IN MONITOR_VAUXN12
+VAUXN13 IN MONITOR_VAUXN13
+VAUXN14 IN MONITOR_VAUXN14
+VAUXN15 IN MONITOR_VAUXN15
+VAUXP0 IN MONITOR_VAUXP0
+VAUXP1 IN MONITOR_VAUXP1
+VAUXP2 IN MONITOR_VAUXP2
+VAUXP3 IN MONITOR_VAUXP3
+VAUXP4 IN MONITOR_VAUXP4
+VAUXP5 IN MONITOR_VAUXP5
+VAUXP6 IN MONITOR_VAUXP6
+VAUXP7 IN MONITOR_VAUXP7
+VAUXP8 IN MONITOR_VAUXP8
+VAUXP9 IN MONITOR_VAUXP9
+VAUXP10 IN MONITOR_VAUXP10
+VAUXP11 IN MONITOR_VAUXP11
+VAUXP12 IN MONITOR_VAUXP12
+VAUXP13 IN MONITOR_VAUXP13
+VAUXP14 IN MONITOR_VAUXP14
+VAUXP15 IN MONITOR_VAUXP15
+VN IN MONITOR_VN
+VP IN MONITOR_VP
+ALM0 OUT MONITOR_ALM0
+ALM1 OUT MONITOR_ALM1
+ALM2 OUT MONITOR_ALM2
+ALM3 OUT MONITOR_ALM3
+ALM4 OUT MONITOR_ALM4
+ALM5 OUT MONITOR_ALM5
+ALM6 OUT MONITOR_ALM6
+ALM7 OUT MONITOR_ALM7
+BUSY OUT MONITOR_BUSY
+CHANNEL0 OUT MONITOR_CHANNEL0
+CHANNEL1 OUT MONITOR_CHANNEL1
+CHANNEL2 OUT MONITOR_CHANNEL2
+CHANNEL3 OUT MONITOR_CHANNEL3
+CHANNEL4 OUT MONITOR_CHANNEL4
+DO0 OUT MONITOR_DO0
+DO1 OUT MONITOR_DO1
+DO2 OUT MONITOR_DO2
+DO3 OUT MONITOR_DO3
+DO4 OUT MONITOR_DO4
+DO5 OUT MONITOR_DO5
+DO6 OUT MONITOR_DO6
+DO7 OUT MONITOR_DO7
+DO8 OUT MONITOR_DO8
+DO9 OUT MONITOR_DO9
+DO10 OUT MONITOR_DO10
+DO11 OUT MONITOR_DO11
+DO12 OUT MONITOR_DO12
+DO13 OUT MONITOR_DO13
+DO14 OUT MONITOR_DO14
+DO15 OUT MONITOR_DO15
+DRDY OUT MONITOR_DRDY
+EOC OUT MONITOR_EOC
+EOS OUT MONITOR_EOS
+JTAGBUSY OUT MONITOR_JTAGBUSY
+JTAGLOCKED OUT MONITOR_JTAGLOCKED
+JTAGMODIFIED OUT MONITOR_JTAGMODIFIED
+MUXADDR0 OUT MONITOR_MUXADDR0
+MUXADDR1 OUT MONITOR_MUXADDR1
+MUXADDR2 OUT MONITOR_MUXADDR2
+MUXADDR3 OUT MONITOR_MUXADDR3
+MUXADDR4 OUT MONITOR_MUXADDR4
+OT OUT MONITOR_OT"""
+BUS_PREFIXES = {'DI', 'DO', 'DADDR', 'ALM', 'CHANNEL', 'MUXADDR', 'VAUXP', 'VAUXN'}
+def bel_name(name):
+    m = re.match(r'^([A-Za-z]+)(\d+)$', name)
+    if m and m.group(1) in BUS_PREFIXES:
+        return f'{m.group(1)}[{m.group(2)}]'
+    return name
+pins = {}      # flat names for prjxray lookup
+bel_pins = {}  # bracket names for nextpnr port matching
+for line in raw.strip().split('\n'):
+    parts = line.split()
+    name, direction, wire = parts[0], parts[1], parts[2]
+    dir_str = 'INPUT' if direction == 'IN' else 'OUTPUT'
+    # pins: flat name, wire without MONITOR_ prefix
+    wire_short = wire.replace('MONITOR_', '')
+    pins[name] = {'primary': name, 'wire': wire_short, 'dir': dir_str}
+    # bel_pins: bracket name
+    bn = bel_name(name)
+    bel_pins[bn] = {'dir': dir_str, 'wire': wire_short}
+# CONVSTCLK and DCLK go through inverters
+bel_pins['CONVSTCLK']['wire'] = 'CONVSTCLKINV_OUT'
+bel_pins['DCLK']['wire'] = 'DCLKINV_OUT'
+result = {
+    'XADC': {
+        'bels': {
+            'XADC': {'type': 'XADC', 'class': 'BEL', 'pins': bel_pins},
+            'CONVSTCLKINV': {
+                'type': 'XADC_CONVSTCLKINV', 'class': 'RBEL',
+                'pins': {
+                    'CONVSTCLK':   {'dir': 'INPUT',  'wire': 'CONVSTCLK'},
+                    'CONVSTCLK_B': {'dir': 'INPUT',  'wire': 'CONVSTCLK'},
+                    'OUT':         {'dir': 'OUTPUT', 'wire': 'CONVSTCLKINV_OUT'}
+                }
+            },
+            'DCLKINV': {
+                'type': 'XADC_DCLKINV', 'class': 'RBEL',
+                'pins': {
+                    'DCLK':   {'dir': 'INPUT',  'wire': 'DCLK'},
+                    'DCLK_B': {'dir': 'INPUT',  'wire': 'DCLK'},
+                    'OUT':    {'dir': 'OUTPUT', 'wire': 'DCLKINV_OUT'}
+                }
+            }
+        },
+        'pips': [
+            {'bel': 'CONVSTCLKINV', 'from_pin': 'CONVSTCLK',   'to_pin': 'OUT'},
+            {'bel': 'CONVSTCLKINV', 'from_pin': 'CONVSTCLK_B', 'to_pin': 'OUT'},
+            {'bel': 'DCLKINV',      'from_pin': 'DCLK',        'to_pin': 'OUT'},
+            {'bel': 'DCLKINV',      'from_pin': 'DCLK_B',      'to_pin': 'OUT'}
+        ],
+        'pins': pins
+    }
+}
+with open('xilinx/external/nextpnr-xilinx-meta/spartan7/site_type_XADC.json', 'w') as f:
+    json.dump(result, f, indent=2)
+print(f'Done: {len(pins)} site pins, {len(bel_pins)} bel pins')
+print(f'Input pins: {sum(1 for v in pins.values() if v["dir"]=="INPUT")}')
+print(f'Output pins: {sum(1 for v in pins.values() if v["dir"]=="OUTPUT")}')
+PYEOF
+reset
+cd ~/nextpnr-xilinx
+python3 xilinx/python/bbaexport.py --device xc7s50csga324-1 --bba xilinx/xc7s50.bba 2>&1 | tail -3 && \
+LD_LIBRARY_PATH=$HOME/boost_libs:/software/xilinx-2025.1/2025.1/Model_Composer/lib/lnx64.o \
+./build/bba/bbasm --l xilinx/xc7s50.bba xilinx/xc7s50.bin 2>&1 | tail -3 && \
+python3 -c "
+import json
+d = json.load(open('/tmp/synth.json'))
+for name, cell in d.get('modules',{}).get('top',{}).get('cells',{}).items():
+    if 'XADC' in cell['type']:
+        cell['connections'] = {}
+        cell['port_directions'] = {}
+json.dump(d, open('/tmp/synth_noroute.json', 'w'))
+print('Stripped')
+" && \
+LD_LIBRARY_PATH=$HOME/boost_libs:/software/xilinx-2025.1/2025.1/Model_Composer/lib/lnx64.o \
+~/nextpnr-xilinx/build/nextpnr-xilinx \
+    --chipdb ~/nextpnr-xilinx/xilinx/xc7s50.bin \
+    --json /tmp/synth_noroute.json \
+    --xdc /tmp/xadc_sanity.xdc \
+    --fasm /tmp/xadc_sanity.fasm 2>&1 | grep -v 'wasm\|WebAssembly' | tail -5 && \
+grep -E "INIT_40|INIT_41" /tmp/xadc_sanity.fasm
