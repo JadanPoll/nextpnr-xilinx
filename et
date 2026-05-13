@@ -1,0 +1,39 @@
+[33mdecb074e[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mcodespace-expert-goldfish-ggx7w4j5vjhv5p9[m[33m, [m[1;31morigin/codespace-expert-goldfish-ggx7w4j5vjhv5p9[m[33m)[m XADC: placement, INIT param emission, chipdb BEL definition
+extract_fasm_map.py
+xc7s50_fasm_map.json.br
+[33m95ea9030[m Update fasm.cc and link to new metadata
+xilinx/external/nextpnr-xilinx-meta
+[33m3834c5a3[m Add compiled WASM binaries and final source tweaks
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/.lpr
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/elab.rtd
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/childModToGenomes.map
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/e/elab.rtd
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/g/global_name.straps.rtd
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/g/instToEncGenName.map
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/genomeDependencyGraph.out
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/genomes.map
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/genomes.txt
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/parentModToGenomes.map
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/synthNameToElabName.map
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/t/design.rtd
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/t/files.rtd
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/t/straps.rtd
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/517545930/u/topModuleToGenome.map
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/incrSyn/top.gnd
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/realtime/dupFiles.rpt
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/realtime/top.tcl
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/wt/synthesis.wdf
+.Xil/Vivado-1743714-fastx3-20.ews.illinois.edu/wt/synthesis_details.wdf
+.Xil/Vivado-1876464-fastx3-20.ews.illinois.edu/.lpr
+.Xil/top_propImpl.xdc
+clockInfo.txt
+vivado.jou
+vivado.log
+vivado_1582878.backup.jou
+vivado_1743714.backup.jou
+vivado_1743714.backup.log
+vivado_1876464.backup.jou
+vivado_1876464.backup.log
+vivado_256336.backup.jou
+vivado_260538.backup.jou
+vivado_260538.backup.log

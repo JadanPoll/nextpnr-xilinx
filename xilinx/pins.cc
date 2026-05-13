@@ -264,6 +264,26 @@ void get_invertible_pins(Context *ctx, dict<IdString, pool<IdString>> &invertibl
     invertible_pins[id_DSP48E1].insert(ctx->id("OPMODE[5]"));
     invertible_pins[id_DSP48E1].insert(ctx->id("OPMODE[6]"));
 
+
+
+    // Nathan: FIFO36E1 invertible pins use physical BRAM DB names.
+    // Confirmed MISSING from fuzzer 4/4 FAIL cases (DATA_WIDTH=4,9):
+    //   RAMB18_Y0: ZINV_CLKARDCLK, ZINV_CLKBWRCLK, ZINV_ENARDEN,
+    //              ZINV_ENBWREN, ZINV_RSTRAMARSTRAM
+    //   RAMB18_Y1: ZINV_CLKARDCLK, ZINV_CLKBWRCLK
+    // Y1 ZINV bits emitted because RAMBFIFO36E1 uses l=u (both halves same cell).
+    // RDCLK/RDEN/RSTREG/RST/WRCLK/WREN are logical names — removed, caused EXTRA.
+    invertible_pins[id_FIFO36E1].insert(id_CLKARDCLK);
+    invertible_pins[id_FIFO36E1].insert(id_CLKBWRCLK);
+    invertible_pins[id_FIFO36E1].insert(id_ENARDEN);
+    invertible_pins[id_FIFO36E1].insert(id_ENBWREN);
+    invertible_pins[id_FIFO36E1].insert(id_RSTRAMARSTRAM);
+
+    // Nathan: FIFO36E1 (packed as RAMBFIFO36E1) — Vivado writes zero ZINV bits.
+    // Confirmed by fuzzer: zero MISSING ZINV bits in all PASS cases (DATA_WIDTH=18,36).
+    // All entries removed — any invertible_pins entry causes spurious EXTRA ZINV bits.
+
+    /* Nathan dangerous remove
     invertible_pins[id_FIFO36E1].insert(id_CLKARDCLK);
     invertible_pins[id_FIFO36E1].insert(id_CLKBWRCLK);
     invertible_pins[id_FIFO36E1].insert(id_ENARDEN);
@@ -272,9 +292,18 @@ void get_invertible_pins(Context *ctx, dict<IdString, pool<IdString>> &invertibl
     invertible_pins[id_FIFO36E1].insert(id_RDCLK);
     invertible_pins[id_FIFO36E1].insert(id_RDEN);
     invertible_pins[id_FIFO36E1].insert(id_RSTREG);
-    invertible_pins[id_FIFO36E1].insert(id_RST);
+
+    // Nathan:  invertible_pins loop uses X_ORIG_TYPE = "FIFO36E1", 
+    // looks up invertible_pins[id_FIFO36E1], finds id_RST, 
+    //writes "ZINV_RST" which doesn't exist in the DB. 
+    //The bit ZINV_RSTRAMARSTRAM is never written. 
+    // 4/4 cases missing in fuzz
+    // i was wrong
+    invertible_pins[id_FIFO36E1].insert(id_RST); // Nathan: changed to id_RST. not 100% confident but based of fuzzing results fed into claude static analysis
     invertible_pins[id_FIFO36E1].insert(id_WRCLK);
     invertible_pins[id_FIFO36E1].insert(id_WREN);
+
+    */
     invertible_pins[id_GTHE2_CHANNEL].insert(id_CLKRSVD0);
     invertible_pins[id_GTHE2_CHANNEL].insert(id_CLKRSVD1);
     invertible_pins[id_GTHE2_CHANNEL].insert(id_CPLLLOCKDETCLK);

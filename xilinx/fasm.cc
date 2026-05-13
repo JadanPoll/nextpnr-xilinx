@@ -1085,7 +1085,22 @@ struct FasmBackend
             if (init == 0)
                 write_bit("ZINIT_OQ");
 
-            write_bit("ODDR.SRUSED", ci->getPort(id_SR) != nullptr);
+
+
+            // Nathan: Vivado does not emit ODDR.SRUSED when SR is tied to a constant net.
+            // ci->getPort(id_SR) != nullptr is true even for constant-driven ports,
+            // causing SRUSED to be written unconditionally. Guard against GND/VCC nets.
+            // Pattern established by ZINV_T1 handling elsewhere in write_iol_config.
+            // Fuzzer confirmed: 5/5 UNCONSTRAINED cases extra SRUSED with .R(1'b0).
+
+            // Nathan: Consntant net guard fix rushed
+            NetInfo *sr_net = ci->getPort(id_SR);
+            bool sr_is_const = sr_net != nullptr && (
+                sr_net->name == ctx->id("$PACKER_GND_NET") ||
+                sr_net->name == ctx->id("$PACKER_VCC_NET"));
+            write_bit("ODDR.SRUSED", sr_net != nullptr && !sr_is_const);
+
+
             auto sr_name = str_or_default(ci->attrs, id_X_ORIG_PORT_SR, "R");
             if (sr_name == "R")
                 write_bit("ZSRVAL_OQ");
@@ -1280,7 +1295,23 @@ struct FasmBackend
                 write_pll(ci);
             } else if (ci->type == id_MMCME2_ADV_MMCME2_ADV) {
                 write_mmcm(ci);
-            } else if (ci->type == id_XADC) {
+            } else if (ci->type == ctx->id("BUFHCE_BUFHCE")) {
+                // Nathan: BUFHCE — horizontal clock buffer with CE.
+                // IN_USE and ZINV_CE emitted via pp_config routing (fasm.cc line 174).
+                // CE_TYPE.ASYNC and INIT_OUT are cell-level config bits.
+                // Confirmed from segbits_clk_hrow_bot_r.db:
+                //   BUFHCE.BUFHCE_X0Y0.CE_TYPE.ASYNC, BUFHCE.BUFHCE_X0Y0.INIT_OUT
+                push(get_tile_name(ci->bel.tile));
+                auto xy = ctx->getSiteLocInTile(ci->bel);
+                push("BUFHCE.BUFHCE_X" + std::to_string(xy.x) + "Y" + std::to_string(xy.y));
+                if (str_or_default(ci->params, ctx->id("CE_TYPE"), "SYNC") == "ASYNC")
+                    write_bit("CE_TYPE.ASYNC");
+                write_bit("INIT_OUT", bool_or_default(ci->params, id_INIT_OUT));
+                pop(2);
+            }
+
+            
+            else if (ci->type == id_XADC) {
                 write_xadc(ci);
             }
             blank();
@@ -1468,9 +1499,26 @@ struct FasmBackend
             // Confirmed from Vivado ground truth: absent for DO_REG=0, present for DO_REG=1
             // in both FIFO18E1 (6 cases) and FIFO36E1 (8 cases). The register clock path
             // is only active when the output register is enabled.
-            if (is_fifo && bool_or_default(ci->params, id_DOA_REG, false)) {
+//            if (is_fifo && bool_or_default(ci->params, id_DOA_REG, false)) {
+//                write_bit("ZINV_REGCLKARDRCLK", true);
+//            }
+
+            // Nathan: FIFO18E1 uses DO_REG param; FIFO36E1/RAMBFIFO36E1 uses DOA_REG.
+            // Prior code read id_DOA_REG for all FIFO types — always false for FIFO18E1,
+            // so ZINV_REGCLKARDRCLK was never emitted for FIFO18E1 DO_REG=1.
+            // Confirmed: synth.json has DO_REG not DOA_REG for FIFO18E1.
+            // DB: BRAM_L.RAMB18_Y0.ZINV_REGCLKARDRCLK 27_104
+            //     BRAM_L.RAMB18_Y1.ZINV_REGCLKARDRCLK 27_216 — both halves valid.
+
+
+            bool do_reg_set = is_fifo && (
+                ci->type == id_FIFO18E1_FIFO18E1 ?
+                    bool_or_default(ci->params, ctx->id("DO_REG"), false) :
+                    bool_or_default(ci->params, id_DOA_REG, false));
+            if (do_reg_set)
                 write_bit("ZINV_REGCLKARDRCLK", true);
-            }
+
+            ////////////
 
             write_bram_width(ci, "READ_WIDTH_A", is_36, half == 1);
             write_bram_width(ci, "READ_WIDTH_B", is_36, half == 1);
@@ -1491,9 +1539,15 @@ struct FasmBackend
             write_bit("RSTREG_PRIORITY_B_RSTREG", str_or_default(ci->params, ctx->id("RSTREG_PRIORITY_B"), "RSTREG") == "RSTREG");
             write_bit("RDADDR_COLLISION_HWCONFIG_DELAYED_WRITE", str_or_default(ci->params, ctx->id("RDADDR_COLLISION_HWCONFIG"), "DELAYED_WRITE") == "DELAYED_WRITE");
 
-            for (auto &invpin : invertible_pins[ctx->id(ci->attrs[id_X_ORIG_TYPE].as_string())])
+            for (auto &invpin : invertible_pins[ctx->id(ci->attrs[id_X_ORIG_TYPE].as_string())]) {
+                if (ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1 && half == 1 &&
+                    invpin != id_CLKARDCLK && invpin != id_CLKBWRCLK)
+                    continue;
                 write_bit("ZINV_" + invpin.str(ctx),
-                          !bool_or_default(ci->params, ctx->id("IS_" + invpin.str(ctx) + "_INVERTED"), false));
+                        !bool_or_default(ci->params, ctx->id("IS_" + invpin.str(ctx) + "_INVERTED"), false));
+            }
+
+
             for (auto wrmode : {"WRITE_MODE_A", "WRITE_MODE_B"}) {
                 std::string mode = str_or_default(ci->params, ctx->id(wrmode), "WRITE_FIRST");
                 if (mode != "WRITE_FIRST")
@@ -1553,10 +1607,13 @@ struct FasmBackend
             // Default param value "NONE" → condition true → bit emitted → frame bit cleared.
             // Only RAMB36 has this config; RAMB18 has no RAM_EXTENSION parameter.
             // half==0 guard prevents double-emission since RAMB36 spans both halves.
-            
+            // above was old
+            // Nathan: FIFO18E1 removed from cell_is_36 — it has no RAMB36 DB entries.
+            // Confirmed: BRAM36_READ_WIDTH_A_1 appearing as EXTRA when FIFO18E1 included.
             bool cell_is_36 = (ci != nullptr && (ci->type == id_RAMB36E1_RAMB36E1 || 
-                                      ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1 ||
-                                      ci->type == id_FIFO18E1_FIFO18E1));
+                                      ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1));
+
+
     
             if (cell_is_36) {
                 push("RAMB36");
@@ -1572,11 +1629,14 @@ struct FasmBackend
                 // DB: BRAM_L.RAMB36.BRAM36_READ_WIDTH_A_1 27_184
                 //     BRAM_L.RAMB36.BRAM36_WRITE_WIDTH_A_1 27_180
 
-
-                int rwa = int_or_default(ci->params, ctx->id("READ_WIDTH_A"), 0);
-                int wwa = int_or_default(ci->params, ctx->id("WRITE_WIDTH_A"), 0);
-                write_bit("BRAM36_READ_WIDTH_A_1", rwa == 9);
+                bool use_dw = (ci->type == id_RAMBFIFO36E1_RAMBFIFO36E1);
+                int rwa = use_dw ? int_or_default(ci->params, ctx->id("DATA_WIDTH"), 0)
+                                : int_or_default(ci->params, ctx->id("READ_WIDTH_A"), 0);
+                int wwa = use_dw ? int_or_default(ci->params, ctx->id("DATA_WIDTH"), 0)
+                                : int_or_default(ci->params, ctx->id("WRITE_WIDTH_A"), 0);
+                write_bit("BRAM36_READ_WIDTH_A_1",  rwa == 9);
                 write_bit("BRAM36_WRITE_WIDTH_A_1", wwa == 9);
+
 
 
                 pop();
@@ -1633,8 +1693,40 @@ struct FasmBackend
                         u = bts->cells[BEL_RAM18_U];
                     }
                 }
+
+
                 write_bram_half(tile, 0, l);
                 write_bram_half(tile, 1, u);
+                // Nathan: FIFO18E1 Y1 config write.
+                // Vivado writes at RAMB18_Y1 for FIFO18E1 when DATA_WIDTH < 18:
+                //   READ_WIDTH_A_1, READ_WIDTH_B_1, WRITE_WIDTH_A_1, WRITE_WIDTH_B_1
+                //   RSTREG_PRIORITY_A_RSTREG, RSTREG_PRIORITY_B_RSTREG
+                //   RDADDR_COLLISION_HWCONFIG_DELAYED_WRITE
+                // For DATA_WIDTH=18: PASS cases confirm Vivado writes nothing at Y1.
+                // Width always encodes as _1 at Y1 for DATA_WIDTH < 18 — confirmed
+                // from fuzzer: _1 missing for DATA_WIDTH=4 and DATA_WIDTH=9.
+                // write_bram_width produces _4/_9 (wrong); hardcode _1 instead.
+                // RSTREG/RDADDR always use default values (always true).
+                if (bts != nullptr && bts->cells[BEL_FIFO18_L] != nullptr) {
+                    CellInfo *fifo18 = bts->cells[BEL_FIFO18_L];
+                    int dw = int_or_default(fifo18->params, ctx->id("DATA_WIDTH"), 0);
+                    if (dw > 0 && dw < 18) {
+                        push(get_tile_name(tile));
+                        push("RAMB18_Y1");
+                        write_bit("READ_WIDTH_A_1",  true);
+                        write_bit("READ_WIDTH_B_1",  true);
+                        write_bit("WRITE_WIDTH_A_1", true);
+                        write_bit("WRITE_WIDTH_B_1", true);
+                        write_bit("RSTREG_PRIORITY_A_RSTREG",
+                            str_or_default(fifo18->params, ctx->id("RSTREG_PRIORITY_A"), "RSTREG") == "RSTREG");
+                        write_bit("RSTREG_PRIORITY_B_RSTREG",
+                            str_or_default(fifo18->params, ctx->id("RSTREG_PRIORITY_B"), "RSTREG") == "RSTREG");
+                        write_bit("RDADDR_COLLISION_HWCONFIG_DELAYED_WRITE",
+                            str_or_default(fifo18->params, ctx->id("RDADDR_COLLISION_HWCONFIG"), "DELAYED_WRITE") == "DELAYED_WRITE");
+                        pop(); // RAMB18_Y1
+                        pop(); // tile
+                    }
+                }
                 blank();
             }
         }
@@ -1757,6 +1849,26 @@ struct FasmBackend
         write_int_vector("LKTABLE[39:0]", lktable, 40);
         write_bit("LOCKREG3_RESERVED[0]");
         write_int_vector("TABLE[9:0]", table, 10);
+        pop(2);
+
+
+
+        // Nathan: Vivado emits CLK_IN2_INT when CLKIN2 is not driven from an external
+        // pad — i.e. when it is tied to GND/VCC or left unconnected.
+        // DB: CMT_TOP_R_UPPER_T.CMT_TOP_R_UPPER_T_PLLE2_CLKIN2
+        //       .CMT_TOP_R_UPPER_T_PLLE2_CLK_IN2_INT !28_40 29_39 29_40
+        // This path is outside the PLLE2_ADV push — needs its own tile+subpath push.
+        // Confirmed missing 12/12 in free_vs_nextpnr and loc_vs_nextpnr.
+        // grep CLK_IN2 out.fasm returns empty — nextpnr never emits this bit.
+
+        // Nathan: Rushed fix, need to emit this after existing pop 2
+        push(get_tile_name(ci->bel.tile));
+        push("CMT_TOP_R_UPPER_T_PLLE2_CLKIN2");
+        NetInfo *clkin2 = ci->getPort(id_CLKIN2);
+        bool clkin2_internal = (clkin2 == nullptr ||
+            clkin2->name == ctx->id("$PACKER_GND_NET") ||
+            clkin2->name == ctx->id("$PACKER_VCC_NET"));
+        write_bit("CMT_TOP_R_UPPER_T_PLLE2_CLK_IN2_INT", clkin2_internal);
         pop(2);
     }
 

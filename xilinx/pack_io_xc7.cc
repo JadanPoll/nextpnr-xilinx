@@ -844,9 +844,28 @@ void XC7Packer::pack_iologic()
                 std::string slave_site = master_site.substr(0, y_pos + 1) + std::to_string(master_y - 1);
                 ci->attrs[id_BEL] = slave_site + "/ISERDESE2";
                 
+                // Nathan: SLAVE ISERDESE2 SHIFTIN1/2 have no tile wire (None in prjxray).
+                // The cascade LIOI_ISOUT10->LIOI_ISIN11 is a hardwired silicon ppip.
+                // Disconnect SHIFTIN nets so router doesn't try to route them.
+                // Confirmed: Vivado ILOGIC_Y0 SHIFTIN1/2 site_pins are None.
+                for (auto port : {ctx->id("SHIFTIN1"), ctx->id("SHIFTIN2")}) {
+                    NetInfo *net = ci->getPort(port);
+                    if (net != nullptr)
+                        ci->disconnectPort(port);
+                }
+                
             } else {
                 // MASTER or STANDALONE logic (Original NextPNR code goes here)
+                // Nathan: fold_inverter for CLKB/OCLKB.
+                // If IS_CLKB_INVERTED already set by pack_inverters, disconnect CLKB
+                // so router doesn't try to route it through CLKINV_OUT (unreachable from BUFIO).
+                // Confirmed: Vivado routes BUFIO->IOI_ILOGIC0_CLKB directly via IOCLK pip.
                 fold_inverter(ci, "CLKB");
+                if (int_or_default(ci->params, ctx->id("IS_CLKB_INVERTED"), 0)) {
+                    NetInfo *clkb = ci->getPort(ctx->id("CLKB"));
+                    if (clkb != nullptr)
+                        ci->disconnectPort(ctx->id("CLKB"));
+                }
                 fold_inverter(ci, "OCLKB");
                 std::string iobdelay = str_or_default(ci->params, id_IOBDELAY, "NONE");
                 BelId io_bel;
@@ -938,6 +957,34 @@ void XC7Packer::pack_iologic()
         }
     }
 
+    // Nathan: Second pass — disconnect ISERDESE2 cascade nets after all cells placed.
+    // Vivado ground truth (ILOGIC_X0Y1/X0Y2):
+    // SLAVE: D, DDLY, SHIFTOUT1/2 unconnected. SHIFTIN1/2 connected to shift nets.
+    // MASTER: SHIFTIN1/2, DDLY unconnected. SHIFTOUT1/2 connected to shift nets.
+    // The ppip LIOI_ISOUT10->LIOI_ISIN11 is always-connected, not in routing graph.
+    // Disconnect both ends of shift1/shift2 nets so router skips them entirely.
+    // Must run AFTER first pass so SLAVE can find MASTER via SHIFTIN1 during placement.
+    for (auto &cell : ctx->cells) {
+        CellInfo *ci = cell.second.get();
+        if (ci->type != id_ISERDESE2) continue;
+        bool is_slave = str_or_default(ci->params, id_SERDES_MODE, "MASTER") == "SLAVE";
+        int data_width = int_or_default(ci->params, ctx->id("DATA_WIDTH"), 8);
+        if (data_width <= 8) continue; // No cascade for DATA_WIDTH <= 8
+        if (is_slave) {
+            // Slave: disconnect D, DDLY, SHIFTOUT1/2 — unconnected in Vivado ground truth
+            for (auto port : {ctx->id("D"), ctx->id("DDLY"),
+                              ctx->id("SHIFTOUT1"), ctx->id("SHIFTOUT2")}) {
+                NetInfo *net = ci->getPort(port);
+                if (net != nullptr) ci->disconnectPort(port);
+            }
+        } else {
+            // Master: disconnect SHIFTIN1/2, DDLY — unconnected in Vivado ground truth
+            for (auto port : {ctx->id("SHIFTIN1"), ctx->id("SHIFTIN2"), ctx->id("DDLY")}) {
+                NetInfo *net = ci->getPort(port);
+                if (net != nullptr) ci->disconnectPort(port);
+            }
+        }
+    }
     flush_cells();
     generic_xform(iologic_rules, false);
     flush_cells();
