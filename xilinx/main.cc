@@ -84,8 +84,8 @@ void UspCommandHandler::customAfterLoad(Context *ctx)
         }
     }
 }
-
-int main(int argc, char *argv[])
+// Nathan: Patched this to work with wasm? but im pretty sure im no supposed to to get web vversion working
+extern "C" int main(int argc, char *argv[])
 {
     UspCommandHandler handler(argc, argv);
     return handler.exec();
