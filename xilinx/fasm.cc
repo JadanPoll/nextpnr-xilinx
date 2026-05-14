@@ -915,11 +915,16 @@ struct FasmBackend
                             write_bit("LVDS.IN_USE");
                     }
                 } else {
-                    if (iostandard == "TDMS_33")
-                        write_bit("TDMS_33.IN_DIFF");
-                    else
-                        write_bit("LVDS_25_SSTL135_SSTL15.IN_DIFF");
+                
+                    // Nathan: IN_DIFF only on Y0 (master/P side). Vivado does not emit on Y1 (N side).
+                    if (yLoc == 0) {
+                        if (is_tmds33)
+                            write_bit("TMDS_33.IN_DIFF");
+                        else
+                            write_bit("LVDS_25_SSTL135_SSTL15.IN_DIFF");
+                    }
                 }
+
 
                 if (pad->attrs.count(id_IN_TERM))
                     write_bit("IN_TERM." + pad->attrs.at(id_IN_TERM).as_string());

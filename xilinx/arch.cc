@@ -762,9 +762,29 @@ void Arch::routeClock()
 
         // check if we have a global clock net, skip otherwise
         bool is_global = false;
-        if ((clk_net->driver.cell->type.in(id_BUFGCTRL, id_BUFCE_BUFG_PS, id_BUFCE_BUFCE, id_BUFGCE_DIV_BUFGCE_DIV)) &&
+
+
+        if ((clk_net->driver.cell->type.in(id_BUFGCTRL, id_BUFCE_BUFG_PS, id_BUFCE_BUFCE, id_BUFGCE_DIV_BUFGCE_DIV,
+                                            id_BUFIO_BUFIO)) &&
             clk_net->driver.port == id_O)
             is_global = true;
+        // Nathan: BUFIO/BUFR input nets need dedicated routing via LIOI_I2GCLK_TOP ppips.
+        // The IBUF output (IOB33_INBUF_EN) driving BUFIO/BUFR cannot be routed by the
+        // general router — it must traverse the always ppip LIOI_I2GCLK_TOP0.IOI_ILOGIC0_O
+        // Confirmed from Vivado: IOB_X0Y125 -> LIOI3_X0Y125 -> HCLK_IOI3_X1Y130 -> BUFIO_X0Y10/I
+        // Treat this net as a dedicated clock net so routeClock() BFS handles it.
+
+        else if (clk_net->driver.cell->type == id_IOB33_INBUF_EN) {
+            bool all_bufio_bufr = true;
+            for (auto &usr : clk_net->users)
+                if (!usr.cell->type.in(id_BUFIO_BUFIO, id_BUFR_BUFR))
+                    all_bufio_bufr = false;
+            if (all_bufio_bufr && !clk_net->users.empty())
+                is_global = true;
+        }
+
+
+
         else if (clk_net->driver.cell->type == id_PLLE2_ADV_PLLE2_ADV && clk_net->users.entries() == 1 &&
                  ((*clk_net->users.begin()).cell->type == id_BUFGCTRL ||
                   (*clk_net->users.begin()).cell->type == id_BUFCE_BUFCE ||
@@ -851,9 +871,23 @@ void Arch::routeClock()
                     }
                     if (dest == WireId())
                         continue;
+                } 
+
+ else if (sink_wire != WireId() && getBoundWireNet(sink_wire) == clk_net) 
+
+                {
+        log_info("            sink wire pre-bound, arc considered routed.\n");
+        // arc fully handled by structural bind in pack_clocking_xc7.cc
+    } 
+    
+else if (clk_net->driver.cell->type == id_BUFIO_BUFIO ||
+                           clk_net->driver.cell->type == id_IOB33_INBUF_EN) {
+                    log_info("            BUFIO path: skipping unroutable dedicated arc.\n");
+                    // arc handled by silicon hardwired ppips, not in chipdb
                 } else {
                     continue;
                 }
+
             }
             while (backtrace.count(dest)) {
                 auto uh = backtrace[dest];
