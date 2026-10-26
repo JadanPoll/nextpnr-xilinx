@@ -743,6 +743,16 @@ void XC7Packer::pack_iologic()
             ci->attrs[id_BEL] = ol_site + (is_tristate ? "/TFF" : "/OUTFF");
         } else if (ci->type == id_OSERDESE2) {
             bool is_slave = str_or_default(ci->params, id_SERDES_MODE, "MASTER") == "SLAVE";
+
+            // TBYTEIN has no active hardware role when byte-wide tristate control is disabled.
+            // Leaving a tied constant connected sends the general router to an unroutable
+            // OLOGIC site wire; Vivado emits no physical route for this pin.
+            if (str_or_default(ci->params, ctx->id("TBYTE_CTL"), "FALSE") == "FALSE") {
+                IdString tbytein = ctx->id("TBYTEIN");
+                if (ci->getPort(tbytein) != nullptr)
+                    ci->disconnectPort(tbytein);
+            }
+
             if (is_slave) {
                 // Find MASTER via SHIFTOUT1 net
                 NetInfo *shiftout = ci->getPort(ctx->id("SHIFTOUT1"));
@@ -777,6 +787,13 @@ void XC7Packer::pack_iologic()
 
                 std::string slave_site = master_site.substr(0, y_pos + 1) + std::to_string(master_y - 1);
                 ci->attrs[id_BEL] = slave_site + "/OSERDESE2";
+
+                // A SLAVE drives the MASTER through SHIFTOUT1/2 and hard cascade paths.
+                // Its own SHIFTIN1/2 pins are inactive and have no Vivado-routed pips.
+                for (auto port : {ctx->id("SHIFTIN1"), ctx->id("SHIFTIN2")}) {
+                    if (ci->getPort(port) != nullptr)
+                        ci->disconnectPort(port);
+                }
             } 
             
             
