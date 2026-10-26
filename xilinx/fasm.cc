@@ -1136,7 +1136,10 @@ struct FasmBackend
             push("OSERDES");
             write_bit("IN_USE");
             std::string type = str_or_default(ci->params, id_DATA_RATE_OQ, "BUF");
-            write_bit(std::string("DATA_RATE_OQ.") + ((ci->getPort(id_OQ) != nullptr) ? type : "BUF"));
+            // DATA_RATE_OQ configures the serializer even when a SLAVE has no OQ user.
+            // Vivado retains the parameter's DDR encoding on the SLAVE in a width-10
+            // cascade; substituting BUF here emits a nonexistent database feature.
+            write_bit(std::string("DATA_RATE_OQ.") + type);
             write_bit(std::string("DATA_RATE_TQ.") +
                       ((ci->getPort(id_TQ) != nullptr) ? str_or_default(ci->params, id_DATA_RATE_TQ, "BUF") : "BUF"));
             int width = int_or_default(ci->params, id_DATA_WIDTH, 8);
